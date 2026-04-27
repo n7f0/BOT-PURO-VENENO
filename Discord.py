@@ -512,7 +512,8 @@ class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
         if canal_registros and isinstance(canal_registros, discord.TextChannel):
             await canal_registros.send(embed=embed)
         
-        # Apagar a mensagem da print do usuário
+        # Aguarda 10 segundos e depois apaga a print
+        await asyncio.sleep(10)
         await msg.delete()
         
         await interaction.followup.send(f"R$ {valor:,.2f} registrado como dinheiro sujo para {self.user_name}!", ephemeral=True)
@@ -636,7 +637,8 @@ class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
         if canal_registros and isinstance(canal_registros, discord.TextChannel):
             await canal_registros.send(embed=embed)
         
-        # Apagar a mensagem da print do usuário
+        # Aguarda 10 segundos e depois apaga a print
+        await asyncio.sleep(10)
         await msg.delete()
         
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -731,7 +733,8 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         if canal_registros and isinstance(canal_registros, discord.TextChannel):
             await canal_registros.send(embed=embed)
         
-        # Apagar a mensagem da print
+        # Aguarda 10 segundos e depois apaga a print
+        await asyncio.sleep(10)
         await msg.delete()
         
         await interaction.followup.send(f"Pagamento de R$ {valor:,.2f} registrado para {self.user_name}!", ephemeral=True)
@@ -1593,4 +1596,4 @@ async def on_ready():
 # ========= INICIAR =========
 if __name__ == "__main__":
     carregar_dados()
-    bot.run(TOKEN) 
+    bot.run(TOKEN)

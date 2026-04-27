@@ -5,24 +5,30 @@ import asyncio
 from datetime import datetime, timedelta
 import json
 import os
+import sys
 import aiohttp
 
 # ========= CONFIGURAÇÕES =========
-TOKEN = "MTQ5NzIzNzg2ODUyMTcxNzg0MA.GiH2Y_.a4wkxsEfMW6bk3icxLJivCqueFj_3_NTWaFAkA"
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+if not TOKEN:
+    print("❌ ERRO: Token do Discord não encontrado!")
+    print("Configure a variável de ambiente DISCORD_TOKEN no Railway")
+    sys.exit(1)
 
 # ========= WEBHOOKS =========
-WEBHOOK_LOGS = "https://discord.com/api/webhooks/1497297134175916224/eSctT2o1fZmiXBIDdgbsRz-WOP65Y2mYZrntiqemXUdW6sz3OnFRkktWtVhoj39Cd4Nf"
-WEBHOOK_ADMIN = "https://discord.com/api/webhooks/1497297462682058833/rhhdaaFbmDLohldzhd0t_wgxuyFVVRk3rPkd7BAD-LRhK_g1rZjYpDT2WssWhjAdi5Hg"
-WEBHOOK_ABRIR_FARM = "https://discord.com/api/webhooks/1497297565970989248/V0efGD5i2GCO5DwMZbKHDIgn95GICWNPYJkxQKSZCS8g9zBvle0CvZvTa2jLgni0IRhI"
+WEBHOOK_LOGS = os.getenv("WEBHOOK_LOGS", "")
+WEBHOOK_ADMIN = os.getenv("WEBHOOK_ADMIN", "")
+WEBHOOK_ABRIR_FARM = os.getenv("WEBHOOK_ABRIR_FARM", "")
 
 # ========= ID DOS CANAIS E CATEGORIAS =========
-CARGO_ADMIN_ID = 1498104494226014319
-CATEGORIA_FARMS_ID = 1498108914703532183
-CATEGORIA_PAINEL_ID = 1498111045489790987
-CHAT_LOGS_ID = 1498109309622550638
-CHAT_ADMIN_LOGS_ID = 1498109569853816963
-CHAT_RANK_ID = 1498109956421976124
-CHAT_COMPRA_VENDA_ID = 1498110154317496330
+CARGO_ADMIN_ID = int(os.getenv("CARGO_ADMIN_ID", "1498104494226014319"))
+CATEGORIA_FARMS_ID = int(os.getenv("CATEGORIA_FARMS_ID", "1498108914703532183"))
+CATEGORIA_PAINEL_ID = int(os.getenv("CATEGORIA_PAINEL_ID", "1498111045489790987"))
+CHAT_LOGS_ID = int(os.getenv("CHAT_LOGS_ID", "1498109309622550638"))
+CHAT_ADMIN_LOGS_ID = int(os.getenv("CHAT_ADMIN_LOGS_ID", "1498109569853816963"))
+CHAT_RANK_ID = int(os.getenv("CHAT_RANK_ID", "1498109956421976124"))
+CHAT_COMPRA_VENDA_ID = int(os.getenv("CHAT_COMPRA_VENDA_ID", "1498110154317496330"))
 
 # ========= BANCO DE DADOS =========
 dados = {
@@ -55,6 +61,8 @@ def carregar_dados():
 
 # ========= FUNÇÕES PARA ENVIAR WEBHOOKS =========
 async def enviar_webhook(webhook_url, titulo, descricao, cor, campos=None, autor_nome=None, autor_icone=None):
+    if not webhook_url:
+        return
     try:
         embed = discord.Embed(
             title=titulo,
@@ -169,19 +177,12 @@ async def atualizar_ranking():
             total_pagamentos = sum(p["valor"] for p in data["pagamentos"])
             dinheiro_sujo = total_farms - total_pagamentos
             
-            total_chumbo = sum(f.get("quantidade", 0) for f in data["farms"] if f.get("produto") == "CHUMBO")
-            total_capsula = sum(f.get("quantidade", 0) for f in data["farms"] if f.get("produto") == "CAPSULA")
-            total_polvora = sum(f.get("quantidade", 0) for f in data["farms"] if f.get("produto") == "POLVORA")
-            
             usuarios_data.append({
                 "nome": user.name,
                 "user_id": user_id,
                 "total_farms": total_farms,
                 "total_pagamentos": total_pagamentos,
-                "dinheiro_sujo": max(0, dinheiro_sujo),
-                "chumbo": total_chumbo,
-                "capsula": total_capsula,
-                "polvora": total_polvora
+                "dinheiro_sujo": max(0, dinheiro_sujo)
             })
         except:
             continue
@@ -520,7 +521,7 @@ class VendaModal(Modal, title="Venda de Munição"):
     )
     faccao_compradora = TextInput(
         label="Facção Compradora",
-        placeholder="Ex: Primeiro Comando, Família do Norte, etc",
+        placeholder="Ex: Primeiro Comando",
         required=True,
         style=discord.TextStyle.short
     )
@@ -601,7 +602,7 @@ class CompraModal(Modal, title="Compra de Produto"):
     )
     faccao_vendedora = TextInput(
         label="Facção Vendedora",
-        placeholder="Ex: Primeiro Comando, Família do Norte, etc",
+        placeholder="Ex: Primeiro Comando",
         required=True,
         style=discord.TextStyle.short
     )
@@ -693,7 +694,6 @@ class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
         self.canal_atual = canal_atual
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Verificar se é admin (já verificado antes de abrir o modal)
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ Apenas administradores podem mudar o nome do canal!", ephemeral=True)
             return
@@ -825,7 +825,6 @@ class FarmChannelView(View):
     
     @discord.ui.button(label="Mudar Nome", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
     async def mudar_nome(self, interaction: discord.Interaction, button: Button):
-        # APENAS ADMIN pode mudar o nome do canal
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ **Apenas administradores podem mudar o nome do canal!**", ephemeral=True)
             return
@@ -939,14 +938,14 @@ class ConfirmarFechamentoView(View):
 class AdicionarAdminModal(Modal, title="Adicionar Administrador"):
     identificador = TextInput(
         label="ID ou Nome do usuário",
-        placeholder="Digite o ID (ex: 123456789) ou @nome do usuário",
+        placeholder="Digite o ID (ex: 123456789) ou @nome",
         required=True,
         style=discord.TextStyle.short
     )
     
     async def on_submit(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("❌ Você não tem permissão para isso!", ephemeral=True)
+            await interaction.response.send_message("❌ Você não tem permissão!", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -967,44 +966,31 @@ class AdicionarAdminModal(Modal, title="Adicionar Administrador"):
                     break
         
         if not usuario_alvo:
-            await interaction.followup.send(f"❌ **Usuário não encontrado!**", ephemeral=True)
+            await interaction.followup.send(f"❌ Usuário não encontrado!", ephemeral=True)
             return
         
         if str(usuario_alvo.id) in dados["admins"]:
-            await interaction.followup.send(f"⚠️ **{usuario_alvo.mention} já é administrador!**", ephemeral=True)
+            await interaction.followup.send(f"⚠️ {usuario_alvo.mention} já é administrador!", ephemeral=True)
             return
         
         dados["admins"].append(str(usuario_alvo.id))
         salvar_dados()
         
-        cargo_admin = interaction.guild.get_role(CARGO_ADMIN_ID)
-        if cargo_admin and hasattr(usuario_alvo, 'add_roles'):
-            try:
-                member = interaction.guild.get_member(usuario_alvo.id)
-                if member:
-                    await member.add_roles(cargo_admin, reason=f"Adicionado por {interaction.user.name}")
-                    await interaction.followup.send(f"✅ **{usuario_alvo.mention} agora é administrador!** Cargo atribuído.", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"✅ **{usuario_alvo.mention} foi adicionado à lista de administradores!**", ephemeral=True)
-            except:
-                await interaction.followup.send(f"✅ **{usuario_alvo.mention} foi adicionado à lista de administradores!**", ephemeral=True)
-        else:
-            await interaction.followup.send(f"✅ **{usuario_alvo.mention} agora é administrador!**", ephemeral=True)
+        await interaction.followup.send(f"✅ {usuario_alvo.mention} agora é administrador!", ephemeral=True)
         
-        await log_acao("setar_admin", interaction.user, f"**Novo admin:** {usuario_alvo.mention}", 0x9b59b6)
-        await log_admin("NOVO ADMIN", f"**Adicionado por:** {interaction.user.mention}\n**Novo admin:** {usuario_alvo.mention}", 0x9b59b6)
+        await log_acao("setar_admin", interaction.user, f"Novo admin: {usuario_alvo.mention}", 0x9b59b6)
 
 class RemoverAdminModal(Modal, title="Remover Administrador"):
     identificador = TextInput(
         label="ID ou Nome do usuário",
-        placeholder="Digite o ID (ex: 123456789) ou @nome do usuário",
+        placeholder="Digite o ID (ex: 123456789) ou @nome",
         required=True,
         style=discord.TextStyle.short
     )
     
     async def on_submit(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("❌ Você não tem permissão para isso!", ephemeral=True)
+            await interaction.response.send_message("❌ Você não tem permissão!", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -1025,29 +1011,19 @@ class RemoverAdminModal(Modal, title="Remover Administrador"):
                     break
         
         if not usuario_alvo:
-            await interaction.followup.send(f"❌ **Usuário não encontrado!**", ephemeral=True)
+            await interaction.followup.send(f"❌ Usuário não encontrado!", ephemeral=True)
             return
         
         if str(usuario_alvo.id) not in dados["admins"]:
-            await interaction.followup.send(f"⚠️ **{usuario_alvo.mention} não é administrador!**", ephemeral=True)
+            await interaction.followup.send(f"⚠️ {usuario_alvo.mention} não é administrador!", ephemeral=True)
             return
         
         dados["admins"].remove(str(usuario_alvo.id))
         salvar_dados()
         
-        cargo_admin = interaction.guild.get_role(CARGO_ADMIN_ID)
-        if cargo_admin and hasattr(usuario_alvo, 'remove_roles'):
-            try:
-                member = interaction.guild.get_member(usuario_alvo.id)
-                if member and cargo_admin in member.roles:
-                    await member.remove_roles(cargo_admin, reason=f"Removido por {interaction.user.name}")
-            except:
-                pass
+        await interaction.followup.send(f"✅ {usuario_alvo.mention} não é mais administrador!", ephemeral=True)
         
-        await interaction.followup.send(f"✅ **{usuario_alvo.mention} não é mais administrador!**", ephemeral=True)
-        
-        await log_acao("setar_admin", interaction.user, f"**Admin removido:** {usuario_alvo.mention}", 0xff0000)
-        await log_admin("ADMIN REMOVIDO", f"**Removido por:** {interaction.user.mention}\n**Ex-admin:** {usuario_alvo.mention}", 0xff0000)
+        await log_acao("setar_admin", interaction.user, f"Admin removido: {usuario_alvo.mention}", 0xff0000)
 
 class PagamentoModal(Modal, title="Pagamento Manual"):
     user_id_text = TextInput(label="ID do usuário", placeholder="Digite o ID", required=True)
@@ -1079,14 +1055,13 @@ class PagamentoModal(Modal, title="Pagamento Manual"):
         
         try:
             membro = await interaction.client.fetch_user(user_id)
-            await membro.send(f"💰 Você recebeu um pagamento manual de R$ {valor_pag:,.2f}!\n**Admin:** {interaction.user.name}")
+            await membro.send(f"💰 Você recebeu um pagamento manual de R$ {valor_pag:,.2f}!")
         except:
             pass
         
         await interaction.response.send_message(f"✅ Pago R$ {valor_pag:,.2f} para <@{user_id}>!", ephemeral=True)
         
-        await log_acao("pagar", interaction.user, f"**Valor:** R${valor_pag}\n**Destinatário:** <@{user_id}>", 0xffa500)
-        await log_admin("PAGAMENTO MANUAL", f"**Admin:** {interaction.user.mention}\n**Valor:** R$ {valor_pag:,.2f}\n**Destinatário:** <@{user_id}>", 0xffa500)
+        await log_acao("pagar", interaction.user, f"Valor: R${valor_pag}\nDestinatário: <@{user_id}>", 0xffa500)
         
         await atualizar_ranking()
 
@@ -1192,13 +1167,12 @@ class BotaoCriarCanalView(View):
     async def criar_canal(self, interaction: discord.Interaction, button: Button):
         
         if interaction.guild is None:
-            await interaction.response.send_message("❌ Este comando deve ser usado em um servidor!", ephemeral=True)
+            await interaction.response.send_message("❌ Use em um servidor!", ephemeral=True)
             return
         
         if not interaction.guild.me.guild_permissions.manage_channels:
             await interaction.response.send_message(
-                "❌ **Erro de Permissão!**\nO bot não tem permissão para **Gerenciar Canais**.\n"
-                "Por favor, dê a permissão de **Administrador** para o bot.",
+                "❌ Erro de Permissão! Bot precisa de permissão de Administrador.",
                 ephemeral=True
             )
             return
@@ -1217,7 +1191,7 @@ class BotaoCriarCanalView(View):
                 salvar_dados()
         
         await interaction.response.send_message(
-            "🔄 **Criando seu canal privado...**\nAguarde alguns segundos.",
+            "🔄 Criando seu canal privado...\nAguarde alguns segundos.",
             ephemeral=True
         )
         
@@ -1225,7 +1199,7 @@ class BotaoCriarCanalView(View):
             categoria_farms = interaction.guild.get_channel(CATEGORIA_FARMS_ID)
             if not categoria_farms or not isinstance(categoria_farms, discord.CategoryChannel):
                 await interaction.edit_original_response(
-                    content=f"❌ **Erro:** Categoria de farms privadas não encontrada!\nID: {CATEGORIA_FARMS_ID}"
+                    content=f"❌ Erro: Categoria não encontrada!"
                 )
                 return
             
@@ -1275,17 +1249,17 @@ class BotaoCriarCanalView(View):
                            "Este é o seu **canal exclusivo** para registrar suas farms.\n"
                            "🔒 Apenas **você** e os **administradores** têm acesso.\n\n"
                            "**COMO REGISTRAR UMA FARM:**\n"
-                           "1️⃣ **Anexe a print** da farm no chat (use o botão 📎)\n"
-                           "2️⃣ **Clique no botão Nova Farm**\n"
-                           "3️⃣ **Preencha as quantidades** dos produtos farmados\n"
-                           "4️⃣ **Envie** - Os registros serão salvos!\n\n"
+                           "1️⃣ **Anexe a print** da farm (botão 📎)\n"
+                           "2️⃣ **Clique em Nova Farm**\n"
+                           "3️⃣ **Preencha as quantidades**\n"
+                           "4️⃣ **Envie**\n\n"
                            "**OUTROS BOTÕES:**\n"
-                           "• **Meu Histórico** - Ver todas as farms\n"
+                           "• **Meu Histórico** - Ver farms\n"
                            "• **Meus Pagamentos** - Ver ganhos\n"
                            "• **Mudar Nome** - APENAS ADMIN\n"
-                           "• **Fechar Caixa Semana** - ADM: Fechar caixa + pagamento\n"
+                           "• **Fechar Caixa Semana** - ADM\n"
                            "• **Histórico Caixa** - Ver fechamentos\n"
-                           "• **Fechar Canal** - ADM: Fechar canal\n\n"
+                           "• **Fechar Canal** - ADM\n\n"
                            "👑 *Apenas administradores podem usar botões administrativos*",
                 color=discord.Color.green()
             )
@@ -1293,33 +1267,25 @@ class BotaoCriarCanalView(View):
             
             view = FarmChannelView(interaction.user.id, interaction.user.name, canal.id)
             await canal.send(embed=embed, view=view)
-            await canal.send("📌 **Para registrar sua primeira farm:**\n1. Anexe a print abaixo\n2. Depois clique em Nova Farm\n3. Preencha as quantidades\n4. Envie")
+            await canal.send("📌 **Para registrar:**\n1. Anexe a print\n2. Clique em Nova Farm\n3. Preencha as quantidades\n4. Envie")
             
             await log_acao(
                 "criar_canal",
                 interaction.user,
-                f"**Canal criado:** {canal.mention}\n**ID:** {canal.id}",
+                f"Canal criado: {canal.mention}",
                 0x00ff00
             )
-            
-            await log_admin(
-                "NOVO CANAL PRIVADO",
-                f"**Usuário:** {interaction.user.mention}\n**Canal:** {canal.mention}\n**ID:** {canal.id}",
-                0x00ff00
-            )
-            
-            await log_criar_canal(interaction.user, canal)
             
             await interaction.edit_original_response(
-                content=f"✅ **Canal privado criado!**\n\n🔗 Acesse: {canal.mention}\n\n📸 **Como registrar:**\n1. Anexe a print da farm\n2. Clique em Nova Farm\n3. Preencha as quantidades\n4. Envie"
+                content=f"✅ Canal privado criado!\n\n🔗 Acesse: {canal.mention}"
             )
             
             await atualizar_ranking()
             
         except Exception as e:
-            await log_acao("erro", None, f"**Erro ao criar canal:** {str(e)}", 0xff0000)
+            await log_acao("erro", None, f"Erro ao criar canal: {str(e)}", 0xff0000)
             await interaction.edit_original_response(
-                content=f"❌ **Erro:** {str(e)[:200]}\n\nVerifique se o bot tem permissão de **Administrador** e se a categoria existe."
+                content=f"❌ Erro: {str(e)[:200]}"
             )
 
 # ========= COMANDOS =========
@@ -1327,7 +1293,7 @@ class BotaoCriarCanalView(View):
 async def admin_panel(ctx):
     """Painel administrativo"""
     if not is_admin(ctx.author):
-        await ctx.send("❌ **Acesso negado!** Apenas administradores podem usar este comando.")
+        await ctx.send("❌ Acesso negado! Apenas administradores.")
         return
     
     num_admins = len(dados["admins"])
@@ -1339,10 +1305,10 @@ async def admin_panel(ctx):
                    f"👥 **Admins cadastrados:** {num_admins}\n\n"
                    "**Botões disponíveis:**\n"
                    "💰 **Pagar Membro** - Pagamento manual\n"
-                   "🏆 **Top da Semana** - Veja ranking\n"
-                   "📋 **Relatório** - Gere relatório geral\n"
-                   "👑 **Adicionar Admin** - Dê admin para alguém\n"
-                   "🗑️ **Remover Admin** - Remova admin de alguém",
+                   "🏆 **Top da Semana** - Ranking\n"
+                   "📋 **Relatório** - Relatório geral\n"
+                   "👑 **Adicionar Admin**\n"
+                   "🗑️ **Remover Admin**",
         color=discord.Color.purple()
     )
     await ctx.send(embed=embed, view=view)
@@ -1351,7 +1317,7 @@ async def admin_panel(ctx):
 async def atualizar_rank_comando(ctx):
     """Atualiza o ranking manualmente"""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Apenas administradores podem usar este comando!")
+        await ctx.send("❌ Apenas administradores!")
         return
     
     await atualizar_ranking()
@@ -1363,29 +1329,11 @@ async def on_ready():
     print(f"✅ Bot {bot.user} está online!")
     print(f"📊 Conectado a {len(bot.guilds)} servidores")
     
-    await log_admin(
-        "BOT INICIADO",
-        f"**Bot:** {bot.user.mention}\n**Status:** Online\n**Comando disponível:** !admin, !atualizar_rank\n**Cargo Admin ID:** {CARGO_ADMIN_ID}",
-        0x00ff00
-    )
-    
     for guild in bot.guilds:
-        cargo_admin = guild.get_role(CARGO_ADMIN_ID)
-        if cargo_admin:
-            print(f"✅ Cargo Admin encontrado: {cargo_admin.name}")
-        else:
-            print(f"⚠️ Cargo Admin com ID {CARGO_ADMIN_ID} não encontrado no servidor {guild.name}")
-        
-        categoria_farms = guild.get_channel(CATEGORIA_FARMS_ID)
-        if categoria_farms and isinstance(categoria_farms, discord.CategoryChannel):
-            print(f"✅ Categoria FARMS PRIVADAS encontrada: {categoria_farms.name}")
-        else:
-            print(f"⚠️ Categoria FARMS PRIVADAS com ID {CATEGORIA_FARMS_ID} não encontrada!")
+        print(f"📁 Servidor: {guild.name}")
         
         categoria_painel = guild.get_channel(CATEGORIA_PAINEL_ID)
         if categoria_painel and isinstance(categoria_painel, discord.CategoryChannel):
-            print(f"✅ Categoria do PAINEL encontrada: {categoria_painel.name}")
-            
             canal_criar = None
             for channel in categoria_painel.channels:
                 if channel.name == "criar-canal" and isinstance(channel, discord.TextChannel):
@@ -1395,9 +1343,9 @@ async def on_ready():
             if not canal_criar:
                 try:
                     canal_criar = await categoria_painel.create_text_channel("criar-canal")
-                    print(f"✅ Canal 'criar-canal' criado na categoria do painel!")
+                    print(f"✅ Canal 'criar-canal' criado!")
                 except Exception as e:
-                    print(f"❌ Erro ao criar canal: {e}")
+                    print(f"❌ Erro: {e}")
                     continue
             
             async for msg in canal_criar.history(limit=5):
@@ -1407,40 +1355,15 @@ async def on_ready():
             embed = discord.Embed(
                 title="SISTEMA DE FARM",
                 description="Clique no botão abaixo para criar seu canal privado!\n\n"
-                           f"👑 **Apenas administradores têm acesso ao painel**\n\n"
-                           "🔒 *Apenas você e os administradores terão acesso ao seu canal*",
+                           "🔒 *Apenas você e os administradores terão acesso*",
                 color=discord.Color.blue()
             )
             view = BotaoCriarCanalView()
             await canal_criar.send(embed=embed, view=view)
-            print(f"✅ Painel de criação configurado em #{canal_criar.name}")
-        else:
-            print(f"⚠️ Categoria do PAINEL com ID {CATEGORIA_PAINEL_ID} não encontrada!")
-        
-        canal_vendas = bot.get_channel(CHAT_COMPRA_VENDA_ID)
-        if canal_vendas and isinstance(canal_vendas, discord.TextChannel):
-            async for msg in canal_vendas.history(limit=5):
-                if msg.author == bot.user:
-                    await msg.delete()
-            
-            embed_vendas = discord.Embed(
-                title="SISTEMA DE COMPRA E VENDA",
-                description="Clique nos botões abaixo para registrar compras ou vendas!\n\n"
-                           "**Venda de Munição:** Registre vendas de munição\n"
-                           "**Compra de Produto:** Registre compras de produtos",
-                color=discord.Color.blue()
-            )
-            view_vendas = CompraVendaView()
-            await canal_vendas.send(embed=embed_vendas, view=view_vendas)
-            print(f"✅ Canal de compra/venda configurado!")
+            print(f"✅ Painel configurado!")
     
     await atualizar_ranking()
-    
     print(f"\n🚀 BOT PRONTO!")
-    print(f"👑 CARGO ADMIN ID: {CARGO_ADMIN_ID}")
-    print(f"📁 CATEGORIA FARMS ID: {CATEGORIA_FARMS_ID}")
-    print(f"📁 CATEGORIA PAINEL ID: {CATEGORIA_PAINEL_ID}")
-    print(f"📌 COMANDOS: !admin, !atualizar_rank")
 
 # ========= INICIAR =========
 if __name__ == "__main__":

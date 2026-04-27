@@ -24,6 +24,7 @@ CATEGORIA_FARMS_ID = int(os.getenv("CATEGORIA_FARMS_ID", "1498108914703532183"))
 CATEGORIA_PAINEL_ID = int(os.getenv("CATEGORIA_PAINEL_ID", "1498111045489790987"))
 CATEGORIA_BACKUP_ID = int(os.getenv("CATEGORIA_BACKUP_ID", "1498305209175380080"))
 CATEGORIA_COMPRA_VENDA_LOGS_ID = int(os.getenv("CATEGORIA_COMPRA_VENDA_LOGS_ID", "1498305956235448390"))
+CATEGORIA_ADMIN_PAINEL_ID = int(os.getenv("CATEGORIA_ADMIN_PAINEL_ID", "1498318907792953374"))
 CHAT_LOGS_ID = int(os.getenv("CHAT_LOGS_ID", "1498109309622550638"))
 CHAT_ADMIN_LOGS_ID = int(os.getenv("CHAT_ADMIN_LOGS_ID", "1498109569853816963"))
 CHAT_RANK_ID = int(os.getenv("CHAT_RANK_ID", "1498109956421976124"))
@@ -123,11 +124,12 @@ async def criar_canal_compra_venda_log(tipo, dados_log):
 async def limpar_logs_usuario(user_id, user_name):
     """Limpa todas as referências ao usuário nos logs e canais"""
     if str(user_id) in dados["usuarios_banidos"]:
-        return
+        return 0
     
     dados["usuarios_banidos"].append(str(user_id))
     total_limpo = 0
     
+    # Canais para verificar
     canais_para_verificar = [
         CHAT_LOGS_ID,
         CHAT_ADMIN_LOGS_ID,
@@ -135,6 +137,7 @@ async def limpar_logs_usuario(user_id, user_name):
         CHAT_COMPRA_VENDA_ID
     ]
     
+    # Verificar logs nos canais principais
     for canal_id in canais_para_verificar:
         canal = bot.get_channel(canal_id)
         if canal and isinstance(canal, discord.TextChannel):
@@ -152,6 +155,25 @@ async def limpar_logs_usuario(user_id, user_name):
             except:
                 pass
     
+    # Verificar canais privados de farms
+    for canal_id in dados["canais"].values():
+        canal = bot.get_channel(canal_id)
+        if canal and isinstance(canal, discord.TextChannel):
+            try:
+                async for mensagem in canal.history(limit=None):
+                    if mensagem.author == bot.user:
+                        if f"<@{user_id}>" in mensagem.content or f"<@!{user_id}>" in mensagem.content:
+                            novo_conteudo = mensagem.content.replace(f"<@{user_id}>", f"[USUÁRIO REMOVIDO - {user_name}]")
+                            novo_conteudo = novo_conteudo.replace(f"<@!{user_id}>", f"[USUÁRIO REMOVIDO - {user_name}]")
+                            try:
+                                await mensagem.edit(content=novo_conteudo)
+                                total_limpo += 1
+                            except:
+                                pass
+            except:
+                pass
+    
+    # Remover usuário do ranking (zerar dados)
     if str(user_id) in dados["usuarios"]:
         dados["usuarios"][str(user_id)] = {
             "farms": [],
@@ -160,6 +182,18 @@ async def limpar_logs_usuario(user_id, user_name):
             "removido_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "removido_por": "sistema"
         }
+        salvar_dados()
+    
+    # Se o usuário tinha um canal privado, fechar
+    if str(user_id) in dados["canais"]:
+        canal_id = dados["canais"][str(user_id)]
+        canal = bot.get_channel(canal_id)
+        if canal:
+            try:
+                await canal.delete(reason=f"Usuário {user_name} removido do sistema")
+            except:
+                pass
+        del dados["canais"][str(user_id)]
         salvar_dados()
     
     return total_limpo
@@ -299,7 +333,6 @@ async def atualizar_ranking():
         color=discord.Color.gold()
     )
     
-    # Ranking CHUMBO
     ranking_text = ""
     for i, u in enumerate(ranking_chumbo, 1):
         medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}°"
@@ -307,7 +340,6 @@ async def atualizar_ranking():
             ranking_text += f"{medalha} **{u['nome']}** - {u['total_chumbo']:,} itens\n"
     embed.add_field(name="CHUMBO", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
     
-    # Ranking CAPSULA
     ranking_text = ""
     for i, u in enumerate(ranking_capsula, 1):
         medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}°"
@@ -315,7 +347,6 @@ async def atualizar_ranking():
             ranking_text += f"{medalha} **{u['nome']}** - {u['total_capsula']:,} itens\n"
     embed.add_field(name="CAPSULA", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
     
-    # Ranking POLVORA
     ranking_text = ""
     for i, u in enumerate(ranking_polvora, 1):
         medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}°"
@@ -323,7 +354,6 @@ async def atualizar_ranking():
             ranking_text += f"{medalha} **{u['nome']}** - {u['total_polvora']:,} itens\n"
     embed.add_field(name="POLVORA", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
     
-    # Ranking TOP SALÁRIO
     ranking_text = ""
     for i, u in enumerate(ranking_salario, 1):
         medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}°"
@@ -402,7 +432,7 @@ class ConfirmarResetView(View):
         await interaction.response.send_message("Reset cancelado.", ephemeral=True)
         self.stop()
 
-# ========= MODAL DE PAGAMENTO =========
+# ========= MODAL DE PAGAMENTO COM PRINT =========
 class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
     valor = TextInput(
         label="Valor do Pagamento (R$)",
@@ -411,11 +441,12 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         style=discord.TextStyle.short
     )
     
-    def __init__(self, user_id, user_name, canal):
+    def __init__(self, user_id, user_name, canal, imagem_url):
         super().__init__()
         self.user_id = user_id
         self.user_name = user_name
         self.canal = canal
+        self.imagem_url = imagem_url
     
     async def on_submit(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
@@ -438,29 +469,34 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
             "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "admin": interaction.user.id,
             "admin_nome": interaction.user.name,
-            "tipo": "Pagamento Farm"
+            "tipo": "Pagamento Farm",
+            "print_url": self.imagem_url
         })
         salvar_dados()
         
+        # Notificar o usuário
         try:
             user = await interaction.client.fetch_user(int(self.user_id))
-            embed = discord.Embed(
+            embed_notificacao = discord.Embed(
                 title="PAGAMENTO RECEBIDO",
                 description=f"Você recebeu um pagamento de **R$ {valor:,.2f}**!",
                 color=discord.Color.green()
             )
-            embed.add_field(name="Admin Responsável", value=interaction.user.mention, inline=True)
-            embed.add_field(name="Data", value=datetime.now().strftime("%d/%m/%Y %H:%M"), inline=True)
-            await user.send(embed=embed)
+            embed_notificacao.add_field(name="Admin Responsável", value=interaction.user.mention, inline=True)
+            embed_notificacao.add_field(name="Data", value=datetime.now().strftime("%d/%m/%Y %H:%M"), inline=True)
+            embed_notificacao.set_image(url=self.imagem_url)
+            await user.send(embed=embed_notificacao)
         except:
             pass
         
+        # Enviar embed no canal
         embed = discord.Embed(
             title="PAGAMENTO REGISTRADO",
             description=f"**Usuário:** {self.user_name}\n**Valor:** R$ {valor:,.2f}\n**Admin:** {interaction.user.mention}",
             color=discord.Color.green(),
             timestamp=datetime.now()
         )
+        embed.set_image(url=self.imagem_url)
         await self.canal.send(embed=embed)
         
         await interaction.followup.send(f"Pagamento de R$ {valor:,.2f} registrado para {self.user_name}!", ephemeral=True)
@@ -984,7 +1020,10 @@ class FarmChannelView(View):
                     msg += f"Fechamento: R$ {p['valor']:,.2f}\n   Salário: R$ {p.get('salario', 0):,.2f} | Extra: R$ {p.get('extra', 0):,.2f}\n"
                 else:
                     msg += f"Pagamento: R$ {p['valor']:,.2f}\n"
-                msg += f"   Admin: {p.get('admin_nome', 'Desconhecido')}\n   📅 {p['data']}\n\n"
+                msg += f"   Admin: {p.get('admin_nome', 'Desconhecido')}\n   📅 {p['data']}\n"
+                if p.get('print_url'):
+                    msg += f"   📸 [Print]({p['print_url']})\n"
+                msg += "\n"
         
         await interaction.response.send_message(msg, ephemeral=True)
     
@@ -994,7 +1033,22 @@ class FarmChannelView(View):
             await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
-        modal = PagamentoFarmModal(self.user_id, self.user_name, interaction.channel)
+        # Verificar se tem print anexada
+        imagem_url = None
+        async for msg in interaction.channel.history(limit=10):
+            if msg.attachments:
+                for attachment in msg.attachments:
+                    if attachment.content_type and attachment.content_type.startswith('image/'):
+                        imagem_url = attachment.url
+                        break
+                if imagem_url:
+                    break
+        
+        if not imagem_url:
+            await interaction.response.send_message("❌ **Nenhuma print encontrada!**\n\nVocê precisa anexar a print do comprovante de pagamento antes de registrar.", ephemeral=True)
+            return
+        
+        modal = PagamentoFarmModal(self.user_id, self.user_name, interaction.channel, imagem_url)
         await interaction.response.send_modal(modal)
     
     @discord.ui.button(label="Fechar Caixa", style=discord.ButtonStyle.danger, emoji="📊", row=1)
@@ -1085,95 +1139,7 @@ class ConfirmarFechamentoView(View):
     async def cancelar(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_message("Cancelado!", ephemeral=True)
 
-# ========= MODAIS ADMIN =========
-class AdicionarAdminModal(Modal, title="Adicionar Administrador"):
-    identificador = TextInput(
-        label="ID ou Nome do usuário",
-        placeholder="Digite o ID ou @nome",
-        required=True,
-        style=discord.TextStyle.short
-    )
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Sem permissão!", ephemeral=True)
-            return
-        
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        
-        identificador = self.identificador.value.strip()
-        usuario_alvo = None
-        
-        if identificador.isdigit():
-            try:
-                usuario_alvo = await interaction.client.fetch_user(int(identificador))
-            except:
-                pass
-        
-        if not usuario_alvo and interaction.guild:
-            for member in interaction.guild.members:
-                if member.name.lower() == identificador.lower() or member.display_name.lower() == identificador.lower():
-                    usuario_alvo = member
-                    break
-        
-        if not usuario_alvo:
-            await interaction.followup.send("Usuário não encontrado!", ephemeral=True)
-            return
-        
-        if str(usuario_alvo.id) in dados["admins"]:
-            await interaction.followup.send(f"{usuario_alvo.mention} já é admin!", ephemeral=True)
-            return
-        
-        dados["admins"].append(str(usuario_alvo.id))
-        salvar_dados()
-        
-        await interaction.followup.send(f"{usuario_alvo.mention} agora é administrador!", ephemeral=True)
-        await log_acao("setar_admin", interaction.user, f"Novo admin: {usuario_alvo.mention}", 0x9b59b6)
-
-class RemoverAdminModal(Modal, title="Remover Administrador"):
-    identificador = TextInput(
-        label="ID ou Nome do usuário",
-        placeholder="Digite o ID ou @nome",
-        required=True,
-        style=discord.TextStyle.short
-    )
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Sem permissão!", ephemeral=True)
-            return
-        
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        
-        identificador = self.identificador.value.strip()
-        usuario_alvo = None
-        
-        if identificador.isdigit():
-            try:
-                usuario_alvo = await interaction.client.fetch_user(int(identificador))
-            except:
-                pass
-        
-        if not usuario_alvo and interaction.guild:
-            for member in interaction.guild.members:
-                if member.name.lower() == identificador.lower() or member.display_name.lower() == identificador.lower():
-                    usuario_alvo = member
-                    break
-        
-        if not usuario_alvo:
-            await interaction.followup.send("Usuário não encontrado!", ephemeral=True)
-            return
-        
-        if str(usuario_alvo.id) not in dados["admins"]:
-            await interaction.followup.send(f"{usuario_alvo.mention} não é admin!", ephemeral=True)
-            return
-        
-        dados["admins"].remove(str(usuario_alvo.id))
-        salvar_dados()
-        
-        await interaction.followup.send(f"{usuario_alvo.mention} não é mais administrador!", ephemeral=True)
-        await log_acao("setar_admin", interaction.user, f"Admin removido: {usuario_alvo.mention}", 0xff0000)
-
+# ========= MODAIS ADMIN PARA PAINEL =========
 class RemoverUsuarioModal(Modal, title="Remover Usuário do Sistema"):
     user_id = TextInput(
         label="ID do usuário",
@@ -1197,11 +1163,19 @@ class RemoverUsuarioModal(Modal, title="Remover Usuário do Sistema"):
                 await interaction.followup.send("Usuário já foi removido!", ephemeral=True)
                 return
             
-            await limpar_logs_usuario(user_id, user.name)
+            total_limpo = await limpar_logs_usuario(user_id, user.name)
             
-            await interaction.followup.send(f"Usuário {user.mention} removido do sistema!", ephemeral=True)
-            await log_admin("USUÁRIO REMOVIDO", f"Usuário: {user.mention}\nAdmin: {interaction.user.mention}", 0xff0000)
+            await interaction.followup.send(f"✅ Usuário {user.mention} removido do sistema!\n**Mensagens anonimizadas:** {total_limpo}", ephemeral=True)
+            await log_admin("USUÁRIO REMOVIDO", f"Usuário: {user.mention}\nAdmin: {interaction.user.mention}\nMensagens limpas: {total_limpo}", 0xff0000)
             await atualizar_ranking()
+            
+            # Tentar remover o cargo admin se tiver
+            if interaction.guild:
+                member = interaction.guild.get_member(user_id)
+                if member:
+                    cargo_admin = interaction.guild.get_role(CARGO_ADMIN_ID)
+                    if cargo_admin and cargo_admin in member.roles:
+                        await member.remove_roles(cargo_admin)
             
         except Exception as e:
             await interaction.followup.send(f"Erro: {e}", ephemeral=True)
@@ -1257,7 +1231,8 @@ class BackupView(View):
         await interaction.followup.send(f"{len(backups_encontrados)} backup(s) deletado(s)!", ephemeral=True)
         await log_admin("BACKUPS DELETADOS", f"Admin: {interaction.user.mention}\nQuantidade: {len(backups_encontrados)}", 0xff0000)
 
-class AdminPanelView(View):
+# ========= PAINEL ADMIN NA CATEGORIA =========
+class AdminPanelCategoriaView(View):
     def __init__(self):
         super().__init__(timeout=None)
     
@@ -1266,6 +1241,7 @@ class AdminPanelView(View):
         if not is_admin(interaction.user):
             await interaction.response.send_message("Sem permissão!", ephemeral=True)
             return
+        
         modal = AdicionarAdminModal()
         await interaction.response.send_modal(modal)
     
@@ -1274,6 +1250,7 @@ class AdminPanelView(View):
         if not is_admin(interaction.user):
             await interaction.response.send_message("Sem permissão!", ephemeral=True)
             return
+        
         modal = RemoverAdminModal()
         await interaction.response.send_modal(modal)
     
@@ -1282,6 +1259,7 @@ class AdminPanelView(View):
         if not is_admin(interaction.user):
             await interaction.response.send_message("Sem permissão!", ephemeral=True)
             return
+        
         modal = RemoverUsuarioModal()
         await interaction.response.send_modal(modal)
     
@@ -1300,6 +1278,116 @@ class AdminPanelView(View):
             color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class AdicionarAdminModal(Modal, title="Adicionar Administrador"):
+    identificador = TextInput(
+        label="ID ou Nome do usuário",
+        placeholder="Digite o ID ou @nome",
+        required=True,
+        style=discord.TextStyle.short
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Sem permissão!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        identificador = self.identificador.value.strip()
+        usuario_alvo = None
+        
+        if identificador.isdigit():
+            try:
+                usuario_alvo = await interaction.client.fetch_user(int(identificador))
+            except:
+                pass
+        
+        if not usuario_alvo and interaction.guild:
+            for member in interaction.guild.members:
+                if member.name.lower() == identificador.lower() or member.display_name.lower() == identificador.lower():
+                    usuario_alvo = member
+                    break
+        
+        if not usuario_alvo:
+            await interaction.followup.send("Usuário não encontrado!", ephemeral=True)
+            return
+        
+        if str(usuario_alvo.id) in dados["admins"]:
+            await interaction.followup.send(f"{usuario_alvo.mention} já é admin!", ephemeral=True)
+            return
+        
+        dados["admins"].append(str(usuario_alvo.id))
+        salvar_dados()
+        
+        # Tentar dar o cargo admin
+        if interaction.guild:
+            cargo_admin = interaction.guild.get_role(CARGO_ADMIN_ID)
+            if cargo_admin:
+                member = interaction.guild.get_member(usuario_alvo.id)
+                if member:
+                    try:
+                        await member.add_roles(cargo_admin)
+                    except:
+                        pass
+        
+        await interaction.followup.send(f"{usuario_alvo.mention} agora é administrador!", ephemeral=True)
+        await log_acao("setar_admin", interaction.user, f"Novo admin: {usuario_alvo.mention}", 0x9b59b6)
+
+class RemoverAdminModal(Modal, title="Remover Administrador"):
+    identificador = TextInput(
+        label="ID ou Nome do usuário",
+        placeholder="Digite o ID ou @nome",
+        required=True,
+        style=discord.TextStyle.short
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Sem permissão!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        identificador = self.identificador.value.strip()
+        usuario_alvo = None
+        
+        if identificador.isdigit():
+            try:
+                usuario_alvo = await interaction.client.fetch_user(int(identificador))
+            except:
+                pass
+        
+        if not usuario_alvo and interaction.guild:
+            for member in interaction.guild.members:
+                if member.name.lower() == identificador.lower() or member.display_name.lower() == identificador.lower():
+                    usuario_alvo = member
+                    break
+        
+        if not usuario_alvo:
+            await interaction.followup.send("Usuário não encontrado!", ephemeral=True)
+            return
+        
+        if str(usuario_alvo.id) not in dados["admins"]:
+            await interaction.followup.send(f"{usuario_alvo.mention} não é admin!", ephemeral=True)
+            return
+        
+        dados["admins"].remove(str(usuario_alvo.id))
+        salvar_dados()
+        
+        # Tentar remover o cargo admin
+        if interaction.guild:
+            cargo_admin = interaction.guild.get_role(CARGO_ADMIN_ID)
+            if cargo_admin:
+                member = interaction.guild.get_member(usuario_alvo.id)
+                if member and cargo_admin in member.roles:
+                    try:
+                        await member.remove_roles(cargo_admin)
+                    except:
+                        pass
+        
+        await interaction.followup.send(f"{usuario_alvo.mention} não é mais administrador!", ephemeral=True)
+        await log_acao("setar_admin", interaction.user, f"Admin removido: {usuario_alvo.mention}", 0xff0000)
 
 # ========= BOTÃO PRINCIPAL =========
 class BotaoCriarCanalView(View):
@@ -1369,7 +1457,7 @@ class BotaoCriarCanalView(View):
                            "📦 **Nova Farm** - Registrar farm (com print)\n"
                            "📊 **Meu Histórico** - Ver suas farms\n"
                            "💰 **Meus Pagamentos** - Ver valores recebidos\n"
-                           "💰 **Registrar Pagamento** - ADM: Pagar membro\n"
+                           "💰 **Registrar Pagamento** - ADM: Pagar membro (precisa de print)\n"
                            "📊 **Fechar Caixa** - ADM: Fechar caixa semanal\n"
                            "✏️ **Mudar Nome** - ADM: Renomear canal\n"
                            "📜 **Histórico Caixa** - Ver fechamentos\n"
@@ -1387,58 +1475,6 @@ class BotaoCriarCanalView(View):
         except Exception as e:
             await interaction.edit_original_response(content=f"Erro: {str(e)[:200]}")
 
-# ========= PAINEL DE BACKUP NA CATEGORIA =========
-class PainelBackupView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    
-    @discord.ui.button(label="Criar Backup", style=discord.ButtonStyle.success, emoji="💾")
-    async def criar_backup(self, interaction: discord.Interaction, button: Button):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Sem permissão!", ephemeral=True)
-            return
-        
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        
-        backup_nome = f"backup_completo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        backup = {
-            "data_backup": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "admin": interaction.user.name,
-            "dados": dados.copy()
-        }
-        
-        with open(backup_nome, "w", encoding="utf-8") as f:
-            json.dump(backup, f, ensure_ascii=False, indent=2)
-        
-        await criar_canal_backup("novo", backup_nome)
-        await interaction.followup.send("Backup criado com sucesso!", ephemeral=True)
-        await log_admin("BACKUP CRIADO", f"Admin: {interaction.user.mention}\nArquivo: {backup_nome}", 0x00ff00)
-    
-    @discord.ui.button(label="Apagar Backups", style=discord.ButtonStyle.danger, emoji="🗑️")
-    async def apagar_backups(self, interaction: discord.Interaction, button: Button):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Sem permissão!", ephemeral=True)
-            return
-        
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        
-        backups_encontrados = []
-        for arquivo in os.listdir('.'):
-            if arquivo.startswith('backup_') and arquivo.endswith('.json'):
-                backups_encontrados.append(arquivo)
-        
-        if not backups_encontrados:
-            await interaction.followup.send("Nenhum backup encontrado!", ephemeral=True)
-            return
-        
-        for backup in backups_encontrados:
-            await criar_canal_backup("deletado", backup)
-            os.remove(backup)
-        
-        await interaction.followup.send(f"{len(backups_encontrados)} backup(s) deletado(s)!", ephemeral=True)
-        await log_admin("BACKUPS DELETADOS", f"Admin: {interaction.user.mention}\nQuantidade: {len(backups_encontrados)}", 0xff0000)
-
 # ========= COMANDOS =========
 @bot.command(name="admin")
 async def admin_panel(ctx):
@@ -1446,17 +1482,12 @@ async def admin_panel(ctx):
         await ctx.send("Acesso negado!")
         return
     
-    view = AdminPanelView()
     embed = discord.Embed(
         title="PAINEL ADMINISTRATIVO",
-        description="**Botões disponíveis:**\n\n"
-                   "👑 **Adicionar Admin** - Dar cargo admin\n"
-                   "🗑️ **Remover Admin** - Remover cargo admin\n"
-                   "👤❌ **Remover Usuário** - Remover do sistema\n"
-                   "💾 **Gerenciar Backups** - Criar/apagar backups",
+        description="Use o painel na categoria de administração para gerenciar o bot.",
         color=discord.Color.purple()
     )
-    await ctx.send(embed=embed, view=view)
+    await ctx.send(embed=embed)
 
 # ========= EVENTOS =========
 @bot.event
@@ -1558,9 +1589,38 @@ async def on_ready():
                            "🗑️ **Apagar Backups** - Remove todos os backups antigos",
                 color=discord.Color.blue()
             )
-            view_backup = PainelBackupView()
+            view_backup = BackupView()
             await canal_backup_painel.send(embed=embed_backup, view=view_backup)
             print(f"Painel de backup configurado na categoria de backup!")
+        
+        # Painel Admin na categoria especificada
+        categoria_admin = guild.get_channel(CATEGORIA_ADMIN_PAINEL_ID)
+        if categoria_admin and isinstance(categoria_admin, discord.CategoryChannel):
+            canal_admin_painel = None
+            for channel in categoria_admin.channels:
+                if channel.name == "painel-admin" and isinstance(channel, discord.TextChannel):
+                    canal_admin_painel = channel
+                    break
+            
+            if not canal_admin_painel:
+                canal_admin_painel = await categoria_admin.create_text_channel("painel-admin")
+            
+            async for msg in canal_admin_painel.history(limit=5):
+                if msg.author == bot.user:
+                    await msg.delete()
+            
+            embed_admin = discord.Embed(
+                title="👑 PAINEL ADMINISTRATIVO",
+                description="**BOTÕES DISPONÍVEIS:**\n\n"
+                           "👑 **Adicionar Admin** - Dá cargo de administrador para um usuário\n"
+                           "🗑️ **Remover Admin** - Remove cargo de administrador\n"
+                           "👤❌ **Remover Usuário** - Remove um usuário do sistema e apaga todas as menções\n"
+                           "💾 **Gerenciar Backups** - Criar ou apagar backups do sistema",
+                color=discord.Color.purple()
+            )
+            view_admin = AdminPanelCategoriaView()
+            await canal_admin_painel.send(embed=embed_admin, view=view_admin)
+            print(f"Painel administrativo configurado na categoria {categoria_admin.name}!")
     
     await atualizar_ranking()
     await log_admin("BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)

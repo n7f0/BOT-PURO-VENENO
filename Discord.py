@@ -25,7 +25,7 @@ CATEGORIA_PAINEL_ID = int(os.getenv("CATEGORIA_PAINEL_ID", "1498111045489790987"
 CATEGORIA_BACKUP_ID = int(os.getenv("CATEGORIA_BACKUP_ID", "1498305209175380080"))
 CATEGORIA_COMPRA_VENDA_LOGS_ID = int(os.getenv("CATEGORIA_COMPRA_VENDA_LOGS_ID", "1498305956235448390"))
 CATEGORIA_ADMIN_PAINEL_ID = int(os.getenv("CATEGORIA_ADMIN_PAINEL_ID", "1498318907792953374"))
-CHAT_ADMIN_PAINEL_ID = int(os.getenv("CHAT_ADMIN_PAINEL_ID", "1498334105908150332"))  # Chat específico do painel admin
+CHAT_ADMIN_PAINEL_ID = int(os.getenv("CHAT_ADMIN_PAINEL_ID", "1498334105908150332"))
 CHAT_LOGS_ID = int(os.getenv("CHAT_LOGS_ID", "1498109309622550638"))
 CHAT_ADMIN_LOGS_ID = int(os.getenv("CHAT_ADMIN_LOGS_ID", "1498109569853816963"))
 CHAT_RANK_ID = int(os.getenv("CHAT_RANK_ID", "1498109956421976124"))
@@ -126,6 +126,7 @@ async def limpar_logs_usuario(user_id, user_name):
     dados["usuarios_banidos"].append(str(user_id))
     total_limpo = 0
     
+    # Canais para verificar
     canais_para_verificar = [
         CHAT_LOGS_ID,
         CHAT_ADMIN_LOGS_ID,
@@ -133,6 +134,7 @@ async def limpar_logs_usuario(user_id, user_name):
         CHAT_COMPRA_VENDA_ID
     ]
     
+    # Verificar logs nos canais principais
     for canal_id in canais_para_verificar:
         canal = bot.get_channel(canal_id)
         if canal and isinstance(canal, discord.TextChannel):
@@ -150,6 +152,7 @@ async def limpar_logs_usuario(user_id, user_name):
             except:
                 pass
     
+    # Verificar canais privados de farms
     for canal_id in dados["canais"].values():
         canal = bot.get_channel(canal_id)
         if canal and isinstance(canal, discord.TextChannel):
@@ -167,6 +170,7 @@ async def limpar_logs_usuario(user_id, user_name):
             except:
                 pass
     
+    # Remover usuário do ranking (zerar dados)
     if str(user_id) in dados["usuarios"]:
         dados["usuarios"][str(user_id)] = {
             "farms": [],
@@ -178,6 +182,7 @@ async def limpar_logs_usuario(user_id, user_name):
         }
         salvar_dados()
     
+    # Se o usuário tinha um canal privado, fechar
     if str(user_id) in dados["canais"]:
         canal_id = dados["canais"][str(user_id)]
         canal = bot.get_channel(canal_id)
@@ -191,6 +196,40 @@ async def limpar_logs_usuario(user_id, user_name):
     
     return total_limpo
 
+async def limpar_todos_usuarios_removidos():
+    """Limpa todos os usuários que já saíram do servidor"""
+    if not hasattr(bot, 'guild'):
+        return 0
+    
+    total_limpo = 0
+    guild = None
+    
+    for g in bot.guilds:
+        guild = g
+        break
+    
+    if not guild:
+        return 0
+    
+    # Lista de usuários atualmente no servidor
+    membros_ids = [str(member.id) for member in guild.members]
+    
+    # IDs de usuários que estão nos dados mas não estão mais no servidor
+    usuarios_remover = []
+    for user_id in dados["usuarios"].keys():
+        if user_id not in membros_ids and "removido_em" not in dados["usuarios"][user_id]:
+            usuarios_remover.append(user_id)
+    
+    for user_id in usuarios_remover:
+        try:
+            user = await bot.fetch_user(int(user_id))
+            total_limpo += await limpar_logs_usuario(user_id, user.name)
+        except:
+            # Se não conseguir buscar o usuário, usar ID como nome
+            total_limpo += await limpar_logs_usuario(user_id, f"Usuário_{user_id}")
+    
+    return total_limpo
+
 # ========= FUNÇÕES PARA ENVIAR LOGS =========
 async def log_acao(acao, usuario, detalhes, cor=None):
     cores = {
@@ -201,6 +240,7 @@ async def log_acao(acao, usuario, detalhes, cor=None):
         "fechar_canal": 0xff0000,
         "fechar_caixa": 0xffa500,
         "reset_rank": 0xff0000,
+        "limpeza_usuarios": 0xffa500,
         "erro": 0xff0000,
         "info": 0x3498db,
         "admin": 0x9b59b6,
@@ -1395,6 +1435,41 @@ class AdminPanelCategoriaView(View):
         modal = RemoverUsuarioModal()
         await interaction.response.send_modal(modal)
     
+    @discord.ui.button(label="Apagar Logs de Membros", style=discord.ButtonStyle.danger, emoji="🧹")
+    async def apagar_logs_membros(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Sem permissão!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        # Contar quantos usuários vão ser removidos
+        guild = interaction.guild
+        membros_ids = [str(member.id) for member in guild.members]
+        
+        usuarios_remover = []
+        for user_id in dados["usuarios"].keys():
+            if user_id not in membros_ids and "removido_em" not in dados["usuarios"].get(user_id, {}):
+                usuarios_remover.append(user_id)
+        
+        if not usuarios_remover:
+            await interaction.followup.send("✅ Nenhum usuário ausente encontrado para limpar!", ephemeral=True)
+            return
+        
+        # Criar view de confirmação
+        view = ConfirmarLimpezaView(usuarios_remover, interaction.user)
+        await interaction.followup.send(
+            f"⚠️ **ATENÇÃO!** ⚠️\n\n"
+            f"Você está prestes a limpar os logs de **{len(usuarios_remover)}** usuário(s) que saíram da facção.\n\n"
+            f"Isso irá:\n"
+            f"• Remover todos os dados destes usuários do ranking\n"
+            f"• Anonimizar todas as menções (@) destes usuários nos logs\n"
+            f"• Apagar os canais privados destes usuários\n\n"
+            f"**Esta ação é IRREVERSÍVEL!**",
+            view=view,
+            ephemeral=True
+        )
+    
     @discord.ui.button(label="Gerenciar Backups", style=discord.ButtonStyle.primary, emoji="💾")
     async def gerenciar_backups(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
@@ -1410,6 +1485,63 @@ class AdminPanelCategoriaView(View):
             color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class ConfirmarLimpezaView(View):
+    def __init__(self, usuarios_remover, admin):
+        super().__init__(timeout=120)
+        self.usuarios_remover = usuarios_remover
+        self.admin = admin
+    
+    @discord.ui.button(label="✅ Sim, limpar logs", style=discord.ButtonStyle.danger, emoji="⚠️")
+    async def confirmar(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Sem permissão!", ephemeral=True)
+            return
+        
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message("Apenas o administrador que solicitou pode confirmar!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        total_limpo = 0
+        usuarios_limpos = []
+        
+        for user_id in self.usuarios_remover:
+            try:
+                user = await interaction.client.fetch_user(int(user_id))
+                nome = user.name
+            except:
+                nome = f"Usuário_{user_id}"
+            
+            limpos = await limpar_logs_usuario(user_id, nome)
+            total_limpo += limpos
+            usuarios_limpos.append(nome)
+        
+        await interaction.followup.send(
+            f"✅ **Limpeza concluída!**\n\n"
+            f"**Usuários removidos:** {len(usuarios_limpos)}\n"
+            f"**Mensagens anonimizadas:** {total_limpo}\n\n"
+            f"Os seguintes usuários foram removidos do sistema:\n"
+            f"{', '.join(usuarios_limpos[:10])}{'...' if len(usuarios_limpos) > 10 else ''}",
+            ephemeral=True
+        )
+        
+        await log_admin(
+            "🧹 LIMPEZA DE LOGS DE MEMBROS",
+            f"**Admin:** {interaction.user.mention}\n"
+            f"**Usuários removidos:** {len(usuarios_limpos)}\n"
+            f"**Mensagens anonimizadas:** {total_limpo}",
+            0xffa500
+        )
+        
+        await atualizar_ranking()
+        self.stop()
+    
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancelar(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("Limpeza cancelada!", ephemeral=True)
+        self.stop()
 
 class AdicionarAdminModal(Modal, title="Adicionar Administrador"):
     identificador = TextInput(
@@ -1752,6 +1884,7 @@ async def on_ready():
                                "👑 **Adicionar Admin** - Dá cargo de administrador para um usuário\n"
                                "🗑️ **Remover Admin** - Remove cargo de administrador\n"
                                "👤❌ **Remover Usuário** - Remove um usuário do sistema e apaga todas as menções\n"
+                               "🧹 **Apagar Logs de Membros** - Remove automaticamente todos os usuários que saíram da facção\n"
                                "💾 **Gerenciar Backups** - Criar ou apagar backups do sistema",
                     color=discord.Color.purple()
                 )
@@ -1770,4 +1903,4 @@ async def on_ready():
 # ========= INICIAR =========
 if __name__ == "__main__":
     carregar_dados()
-    bot.run(TOKEN) 
+    bot.run(TOKEN)

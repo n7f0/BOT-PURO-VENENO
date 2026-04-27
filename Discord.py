@@ -1433,7 +1433,6 @@ class AdminPanelCategoriaView(View):
         
         await interaction.response.defer(ephemeral=True, thinking=True)
         
-        # Contar quantos usuários vão ser removidos
         guild = interaction.guild
         membros_ids = [str(member.id) for member in guild.members]
         
@@ -1446,7 +1445,6 @@ class AdminPanelCategoriaView(View):
             await interaction.followup.send("✅ Nenhum usuário ausente encontrado para limpar!", ephemeral=True)
             return
         
-        # Criar view de confirmação
         view = ConfirmarLimpezaView(usuarios_remover, interaction.user)
         await interaction.followup.send(
             f"⚠️ **ATENÇÃO!** ⚠️\n\n"
@@ -1856,44 +1854,68 @@ async def on_ready():
         else:
             print(f"  ⚠️ Categoria de backup ID {CATEGORIA_BACKUP_ID} não encontrada!")
         
-        # ========= PAINEL ADMIN - CRIA O CANAL AUTOMATICAMENTE =========
+        # ========= PAINEL ADMIN - CRIA O CANAL COM PERMISSÕES E ENVIA O PAINEL =========
         categoria_admin = guild.get_channel(CATEGORIA_ADMIN_PAINEL_ID)
-        
         if categoria_admin and isinstance(categoria_admin, discord.CategoryChannel):
-            # Verificar se o canal "painel-admin" já existe
             canal_admin_painel = None
             for channel in categoria_admin.channels:
                 if channel.name == "painel-admin" and isinstance(channel, discord.TextChannel):
                     canal_admin_painel = channel
                     break
             
-            # Se não existir, criar o canal
+            # Se o canal não existir, cria com sobrescritas de permissão
             if not canal_admin_painel:
                 try:
-                    canal_admin_painel = await categoria_admin.create_text_channel("painel-admin")
-                    print(f"  ✅ Canal 'painel-admin' criado na categoria {categoria_admin.name}!")
+                    # Definir permissões: apenas admins e o bot podem ver e enviar mensagens
+                    admin_overwrites = {
+                        guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                        guild.me: discord.PermissionOverwrite(
+                            read_messages=True, send_messages=True, manage_channels=True,
+                            embed_links=True, attach_files=True, read_message_history=True
+                        )
+                    }
+                    # Adicionar cargo admin, se existir
+                    cargo_admin = guild.get_role(CARGO_ADMIN_ID)
+                    if cargo_admin:
+                        admin_overwrites[cargo_admin] = discord.PermissionOverwrite(
+                            read_messages=True, send_messages=True
+                        )
+                    
+                    canal_admin_painel = await categoria_admin.create_text_channel(
+                        "painel-admin", overwrites=admin_overwrites
+                    )
+                    print(f"  ✅ Canal 'painel-admin' criado com permissões!")
                 except Exception as e:
                     print(f"  ❌ Erro ao criar canal 'painel-admin': {e}")
                     continue
             
             # Limpar mensagens antigas do bot
-            async for msg in canal_admin_painel.history(limit=10):
-                if msg.author == bot.user:
-                    await msg.delete()
+            try:
+                async for msg in canal_admin_painel.history(limit=10):
+                    if msg.author == bot.user:
+                        await msg.delete()
+            except Exception as e:
+                print(f"  ⚠️ Não foi possível limpar mensagens no canal admin: {e}")
             
-            embed_admin = discord.Embed(
-                title="👑 PAINEL ADMINISTRATIVO",
-                description="**BOTÕES DISPONÍVEIS:**\n\n"
-                           "👑 **Adicionar Admin** - Dá cargo de administrador para um usuário\n"
-                           "🗑️ **Remover Admin** - Remove cargo de administrador\n"
-                           "👤❌ **Remover Usuário** - Remove um usuário do sistema e apaga todas as menções\n"
-                           "🧹 **Apagar Logs de Membros** - Remove automaticamente todos os usuários que saíram da facção\n"
-                           "💾 **Gerenciar Backups** - Criar ou apagar backups do sistema",
-                color=discord.Color.purple()
-            )
-            view_admin = AdminPanelCategoriaView()
-            await canal_admin_painel.send(embed=embed_admin, view=view_admin)
-            print(f"  ✅ Painel administrativo configurado no canal #{canal_admin_painel.name}!")
+            # Enviar painel administrativo
+            try:
+                embed_admin = discord.Embed(
+                    title="👑 PAINEL ADMINISTRATIVO",
+                    description="**BOTÕES DISPONÍVEIS:**\n\n"
+                               "👑 **Adicionar Admin** - Dá cargo de administrador para um usuário\n"
+                               "🗑️ **Remover Admin** - Remove cargo de administrador\n"
+                               "👤❌ **Remover Usuário** - Remove um usuário do sistema e apaga todas as menções\n"
+                               "🧹 **Apagar Logs de Membros** - Remove automaticamente todos os usuários que saíram da facção\n"
+                               "💾 **Gerenciar Backups** - Criar ou apagar backups do sistema",
+                    color=discord.Color.purple()
+                )
+                view_admin = AdminPanelCategoriaView()
+                await canal_admin_painel.send(embed=embed_admin, view=view_admin)
+                print(f"  ✅ Painel administrativo enviado no canal #{canal_admin_painel.name}!")
+            except discord.Forbidden:
+                print(f"  ❌ SEM PERMISSÃO para enviar mensagens no canal admin! Verifique as permissões do bot.")
+            except Exception as e:
+                print(f"  ❌ Erro ao enviar painel admin: {e}")
         else:
             print(f"  ⚠️ Categoria de Admin ID {CATEGORIA_ADMIN_PAINEL_ID} NÃO ENCONTRADA!")
     

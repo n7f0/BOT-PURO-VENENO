@@ -60,7 +60,6 @@ def carregar_dados():
         return False
 
 async def criar_canal_backup(tipo, nome_arquivo=None):
-    """Cria canal na categoria de backup"""
     categoria = bot.get_channel(CATEGORIA_BACKUP_ID)
     if not categoria or not isinstance(categoria, discord.CategoryChannel):
         print(f"Categoria de backup {CATEGORIA_BACKUP_ID} não encontrada!")
@@ -73,13 +72,12 @@ async def criar_canal_backup(tipo, nome_arquivo=None):
         canal = await categoria.create_text_channel(nome_canal)
         
         embed = discord.Embed(
-            title="📦 NOVO BACKUP CRIADO",
+            title="NOVO BACKUP CRIADO",
             description=f"**Arquivo:** {nome_arquivo}\n**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
             color=discord.Color.green()
         )
         await canal.send(embed=embed)
         
-        # Enviar arquivo se existir
         if nome_arquivo and os.path.exists(nome_arquivo):
             await canal.send(file=discord.File(nome_arquivo))
         
@@ -90,7 +88,7 @@ async def criar_canal_backup(tipo, nome_arquivo=None):
         canal = await categoria.create_text_channel(nome_canal)
         
         embed = discord.Embed(
-            title="🗑️ BACKUP DELETADO",
+            title="BACKUP DELETADO",
             description=f"**Arquivo:** {nome_arquivo}\n**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
             color=discord.Color.red()
         )
@@ -99,7 +97,6 @@ async def criar_canal_backup(tipo, nome_arquivo=None):
         return canal
 
 async def criar_canal_compra_venda_log(tipo, dados_log):
-    """Cria canal na categoria de logs de compra/venda"""
     categoria = bot.get_channel(CATEGORIA_COMPRA_VENDA_LOGS_ID)
     if not categoria or not isinstance(categoria, discord.CategoryChannel):
         print(f"Categoria de compra/venda logs {CATEGORIA_COMPRA_VENDA_LOGS_ID} não encontrada!")
@@ -110,7 +107,7 @@ async def criar_canal_compra_venda_log(tipo, dados_log):
     canal = await categoria.create_text_channel(nome_canal)
     
     embed = discord.Embed(
-        title=f"📝 LOG DE {tipo.upper()}",
+        title=f"LOG DE {tipo.upper()}",
         color=discord.Color.blue(),
         timestamp=datetime.now()
     )
@@ -122,7 +119,6 @@ async def criar_canal_compra_venda_log(tipo, dados_log):
     return canal
 
 async def registrar_pagamento(user_id, valor, admin, tipo="manual", salario=None, extra=None):
-    """Registra um pagamento e atualiza o ranking de salários"""
     if str(user_id) not in dados["usuarios"]:
         dados["usuarios"][str(user_id)] = {"farms": [], "pagamentos": [], "nome": "Usuário"}
     
@@ -144,14 +140,12 @@ async def registrar_pagamento(user_id, valor, admin, tipo="manual", salario=None
     await atualizar_ranking()
 
 async def limpar_logs_usuario(user_id, user_name):
-    """Limpa todas as referências ao usuário nos logs e canais"""
     if str(user_id) in dados["usuarios_banidos"]:
         return
     
     dados["usuarios_banidos"].append(str(user_id))
     total_limpo = 0
     
-    # Canais para verificar
     canais_para_verificar = [
         CHAT_LOGS_ID,
         CHAT_ADMIN_LOGS_ID,
@@ -161,7 +155,7 @@ async def limpar_logs_usuario(user_id, user_name):
     
     for canal_id in canais_para_verificar:
         canal = bot.get_channel(canal_id)
-        if canal:
+        if canal and isinstance(canal, discord.TextChannel):
             try:
                 async for mensagem in canal.history(limit=None):
                     if mensagem.author == bot.user:
@@ -176,7 +170,6 @@ async def limpar_logs_usuario(user_id, user_name):
             except:
                 pass
     
-    # Remover usuário do ranking (zerar dados)
     if str(user_id) in dados["usuarios"]:
         dados["usuarios"][str(user_id)] = {
             "farms": [],
@@ -268,14 +261,8 @@ def is_admin(member) -> bool:
 
 # ========= FUNÇÃO PARA ATUALIZAR RANKING =========
 async def atualizar_ranking():
-    """Atualiza o canal de ranking com todas as categorias"""
     canal_rank = bot.get_channel(CHAT_RANK_ID)
-    if not canal_rank:
-        print(f"Canal de rank {CHAT_RANK_ID} não encontrado!")
-        return
-    
-    if not isinstance(canal_rank, discord.TextChannel):
-        print(f"Canal {CHAT_RANK_ID} não é um canal de texto!")
+    if not canal_rank or not isinstance(canal_rank, discord.TextChannel):
         return
     
     async for msg in canal_rank.history(limit=50):
@@ -290,17 +277,13 @@ async def atualizar_ranking():
         try:
             user = await bot.fetch_user(int(user_id))
             
-            # Totais por produto
             total_chumbo = 0
             total_capsula = 0
             total_polvora = 0
-            total_geral = 0
             
             for farm in data["farms"]:
                 for produto in farm.get("produtos", []):
                     qtd = produto["quantidade"]
-                    total_geral += qtd
-                    
                     if produto["produto"] == "CHUMBO":
                         total_chumbo += qtd
                     elif produto["produto"] == "CAPSULA":
@@ -314,7 +297,6 @@ async def atualizar_ranking():
             usuarios_data.append({
                 "nome": user.name,
                 "user_id": user_id,
-                "total_geral": total_geral,
                 "total_chumbo": total_chumbo,
                 "total_capsula": total_capsula,
                 "total_polvora": total_polvora,
@@ -324,12 +306,9 @@ async def atualizar_ranking():
         except:
             continue
     
-    # Rankings por produto
     ranking_chumbo = sorted(usuarios_data, key=lambda x: x["total_chumbo"], reverse=True)[:5]
     ranking_capsula = sorted(usuarios_data, key=lambda x: x["total_capsula"], reverse=True)[:5]
     ranking_polvora = sorted(usuarios_data, key=lambda x: x["total_polvora"], reverse=True)[:5]
-    
-    # Ranking TOP SALÁRIO (quem mais recebeu dinheiro)
     ranking_salario = sorted(usuarios_data, key=lambda x: x["total_pagamentos"], reverse=True)[:5]
     
     embed = discord.Embed(
@@ -388,18 +367,18 @@ class RankingView(View):
     @discord.ui.button(label="Resetar Ranking", style=discord.ButtonStyle.danger, emoji="⚠️")
     async def resetar(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem resetar o ranking!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         view = ConfirmarResetView()
         await interaction.response.send_message(
-            "⚠️ **ATENÇÃO!** ⚠️\n\n"
+            "⚠️ ATENÇÃO! ⚠️\n\n"
             "Você tem certeza que deseja RESETAR TODO O RANKING?\n\n"
             "Isso irá:\n"
             "• Apagar todas as farms registradas\n"
             "• Apagar todos os pagamentos\n"
             "• Apagar todo o histórico de caixa\n\n"
-            "**Um backup será salvo automaticamente antes do reset.**\n\n"
+            "Um backup será salvo automaticamente antes do reset.\n\n"
             "Esta ação é IRREVERSÍVEL!",
             view=view,
             ephemeral=True
@@ -413,7 +392,6 @@ class ConfirmarResetView(View):
     async def confirmar(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(ephemeral=True, thinking=True)
         
-        # Salvar backup
         backup_nome = f"backup_rank_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         backup = {
             "usuarios": dados["usuarios"].copy(),
@@ -424,7 +402,6 @@ class ConfirmarResetView(View):
         with open(backup_nome, "w", encoding="utf-8") as f:
             json.dump(backup, f, ensure_ascii=False, indent=2)
         
-        # Criar canal de backup novo
         await criar_canal_backup("novo", backup_nome)
         
         dados["usuarios"] = {}
@@ -432,9 +409,9 @@ class ConfirmarResetView(View):
         salvar_dados()
         
         await log_acao("reset_rank", interaction.user, f"Ranking resetado por {interaction.user.mention}", 0xff0000)
-        await log_admin("RANKING RESETADO", f"**Admin:** {interaction.user.mention}\n**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0xff0000)
+        await log_admin("RANKING RESETADO", f"Admin: {interaction.user.mention}\nData: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0xff0000)
         
-        await interaction.followup.send("✅ Ranking resetado com sucesso! Um backup foi salvo.", ephemeral=True)
+        await interaction.followup.send("Ranking resetado com sucesso! Um backup foi salvo.", ephemeral=True)
         await atualizar_ranking()
         self.stop()
     
@@ -460,7 +437,7 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
     
     async def on_submit(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem registrar pagamentos!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -468,10 +445,9 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         try:
             valor = float(self.valor.value.replace(",", "."))
         except ValueError:
-            await interaction.followup.send("Valor inválido! Use apenas números.", ephemeral=True)
+            await interaction.followup.send("Valor inválido!", ephemeral=True)
             return
         
-        # Registrar pagamento
         if str(self.user_id) not in dados["usuarios"]:
             dados["usuarios"][str(self.user_id)] = {"farms": [], "pagamentos": [], "nome": self.user_name}
         
@@ -484,11 +460,10 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         })
         salvar_dados()
         
-        # Notificar o usuário
         try:
             user = await interaction.client.fetch_user(int(self.user_id))
             embed = discord.Embed(
-                title="💰 PAGAMENTO RECEBIDO",
+                title="PAGAMENTO RECEBIDO",
                 description=f"Você recebeu um pagamento de **R$ {valor:,.2f}**!",
                 color=discord.Color.green()
             )
@@ -498,19 +473,18 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         except:
             pass
         
-        # Enviar embed no canal
         embed = discord.Embed(
-            title="💰 PAGAMENTO REGISTRADO",
+            title="PAGAMENTO REGISTRADO",
             description=f"**Usuário:** {self.user_name}\n**Valor:** R$ {valor:,.2f}\n**Admin:** {interaction.user.mention}",
             color=discord.Color.green(),
             timestamp=datetime.now()
         )
         await self.canal.send(embed=embed)
         
-        await interaction.followup.send(f"✅ Pagamento de R$ {valor:,.2f} registrado para {self.user_name}!", ephemeral=True)
+        await interaction.followup.send(f"Pagamento de R$ {valor:,.2f} registrado para {self.user_name}!", ephemeral=True)
         
-        await log_acao("pagar", interaction.user, f"**Usuário:** {self.user_name}\n**Valor:** R$ {valor:,.2f}", 0xffa500)
-        await log_admin("💰 PAGAMENTO", f"**Usuário:** {self.user_name}\n**Valor:** R$ {valor:,.2f}\n**Admin:** {interaction.user.mention}", 0xffa500)
+        await log_acao("pagar", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xffa500)
+        await log_admin("PAGAMENTO", f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}\nAdmin: {interaction.user.mention}", 0xffa500)
         
         await atualizar_ranking()
 
@@ -543,7 +517,7 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
     
     async def on_submit(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem fechar caixa!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -554,7 +528,7 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             extra_valor = float(self.extra.value.replace(",", "."))
             total = sujo + salario_valor + extra_valor
         except ValueError:
-            await interaction.followup.send("Valores inválidos! Use apenas números.", ephemeral=True)
+            await interaction.followup.send("Valores inválidos!", ephemeral=True)
             return
         
         valor_pagamento = salario_valor + extra_valor
@@ -562,7 +536,6 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
         if str(self.user_id) not in dados["usuarios"]:
             dados["usuarios"][str(self.user_id)] = {"farms": [], "pagamentos": [], "nome": self.user_name}
         
-        # Registrar pagamento
         dados["usuarios"][str(self.user_id)]["pagamentos"].append({
             "valor": valor_pagamento,
             "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -595,11 +568,10 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
         
         lucro_liquido = total - salario_valor - extra_valor
         
-        # Notificar usuário
         try:
             user = await interaction.client.fetch_user(int(self.user_id))
             embed_notificacao = discord.Embed(
-                title="📊 FECHAMENTO DE CAIXA",
+                title="FECHAMENTO DE CAIXA",
                 description=f"Registrado para {self.user_name}!",
                 color=discord.Color.orange()
             )
@@ -613,7 +585,7 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             pass
         
         embed = discord.Embed(
-            title="📊 FECHAMENTO DE CAIXA SEMANAL",
+            title="FECHAMENTO DE CAIXA SEMANAL",
             description=f"**{self.user_name}**, fechamento registrado!",
             color=discord.Color.orange(),
             timestamp=datetime.now()
@@ -628,10 +600,10 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
         embed.add_field(name="Responsável", value=interaction.user.mention, inline=False)
         
         await self.canal.send(embed=embed)
-        await interaction.followup.send(f"✅ Fechamento de caixa registrado! Pagamento de R$ {valor_pagamento:,.2f} realizado.", ephemeral=True)
+        await interaction.followup.send(f"Fechamento de caixa registrado! Pagamento de R$ {valor_pagamento:,.2f} realizado.", ephemeral=True)
         
-        await log_acao("fechar_caixa", interaction.user, f"**Usuário:** {self.user_name}\n**Pagamento:** R$ {valor_pagamento}", 0xffa500)
-        await log_admin("📊 FECHAMENTO DE CAIXA", f"**Usuário:** {self.user_name}\n**Admin:** {interaction.user.mention}\n**Total Pago:** R$ {valor_pagamento:,.2f}", 0xffa500)
+        await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nPagamento: R$ {valor_pagamento}", 0xffa500)
+        await log_admin("FECHAMENTO DE CAIXA", f"Usuário: {self.user_name}\nAdmin: {interaction.user.mention}\nTotal Pago: R$ {valor_pagamento:,.2f}", 0xffa500)
         
         await atualizar_ranking()
 
@@ -699,7 +671,6 @@ class FarmModal(Modal, title="Registrar Nova Farm"):
         if str(self.user_id) not in dados["usuarios"]:
             dados["usuarios"][str(self.user_id)] = {"farms": [], "pagamentos": [], "nome": self.user_name}
         
-        # Registrar como UMA ÚNICA FARM
         farm_registro = {
             "produtos": produtos_registrados,
             "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -712,7 +683,7 @@ class FarmModal(Modal, title="Registrar Nova Farm"):
         salvar_dados()
         
         embed = discord.Embed(
-            title="✅ FARM REGISTRADA COM SUCESSO",
+            title="FARM REGISTRADA COM SUCESSO",
             color=discord.Color.green()
         )
         
@@ -733,8 +704,8 @@ class FarmModal(Modal, title="Registrar Nova Farm"):
         await interaction.followup.send(embed=embed, ephemeral=True)
         
         produtos_str = ", ".join([f"{p['produto']}: {p['quantidade']}" for p in produtos_registrados])
-        await log_acao("registrar_farm", interaction.user, f"**Produtos:** {produtos_str}")
-        await log_admin("📦 NOVA FARM", f"**Usuário:** {interaction.user.mention}\n**Produtos:** {produtos_str}", 0x00ff00)
+        await log_acao("registrar_farm", interaction.user, f"Produtos: {produtos_str}")
+        await log_admin("NOVA FARM", f"Usuário: {interaction.user.mention}\nProdutos: {produtos_str}", 0x00ff00)
         
         await atualizar_ranking()
 
@@ -778,7 +749,6 @@ class VendaModal(Modal, title="Venda de Munição"):
         faccao = self.faccao_compradora.value.strip()
         responsavel_nome = self.responsavel.value.strip()
         
-        # Criar log na categoria de compra/venda
         dados_log = {
             "Tipo": "VENDA",
             "Quantidade": f"{qtd:,} munições",
@@ -790,7 +760,7 @@ class VendaModal(Modal, title="Venda de Munição"):
         await criar_canal_compra_venda_log("venda", dados_log)
         
         embed = discord.Embed(
-            title="💸 VENDA DE MUNIÇÃO",
+            title="VENDA DE MUNIÇÃO",
             color=discord.Color.green(),
             timestamp=datetime.now()
         )
@@ -814,11 +784,11 @@ class VendaModal(Modal, title="Venda de Munição"):
                 "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
             salvar_dados()
-            await interaction.followup.send("✅ Venda registrada com sucesso!", ephemeral=True)
+            await interaction.followup.send("Venda registrada com sucesso!", ephemeral=True)
         else:
             await interaction.followup.send("Canal de vendas não encontrado!", ephemeral=True)
         
-        await log_acao("compra_venda", interaction.user, f"**Venda:** {qtd} munições - R$ {valor}", 0x00ff00)
+        await log_acao("compra_venda", interaction.user, f"Venda: {qtd} munições - R$ {valor}", 0x00ff00)
 
 class CompraModal(Modal, title="Compra de Produto"):
     quantidade = TextInput(
@@ -866,7 +836,6 @@ class CompraModal(Modal, title="Compra de Produto"):
         faccao = self.faccao_vendedora.value.strip()
         responsavel_nome = self.responsavel.value.strip()
         
-        # Criar log na categoria de compra/venda
         dados_log = {
             "Tipo": "COMPRA",
             "Quantidade": f"{qtd:,}",
@@ -879,7 +848,7 @@ class CompraModal(Modal, title="Compra de Produto"):
         await criar_canal_compra_venda_log("compra", dados_log)
         
         embed = discord.Embed(
-            title="🛒 COMPRA DE PRODUTO",
+            title="COMPRA DE PRODUTO",
             color=discord.Color.blue(),
             timestamp=datetime.now()
         )
@@ -905,11 +874,11 @@ class CompraModal(Modal, title="Compra de Produto"):
                 "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
             salvar_dados()
-            await interaction.followup.send("✅ Compra registrada com sucesso!", ephemeral=True)
+            await interaction.followup.send("Compra registrada com sucesso!", ephemeral=True)
         else:
             await interaction.followup.send("Canal de vendas não encontrado!", ephemeral=True)
         
-        await log_acao("compra_venda", interaction.user, f"**Compra:** {qtd} x {produto_nome} - R$ {valor}", 0x00ff00)
+        await log_acao("compra_venda", interaction.user, f"Compra: {qtd} x {produto_nome} - R$ {valor}", 0x00ff00)
 
 class CompraVendaView(View):
     def __init__(self):
@@ -951,7 +920,7 @@ class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
         
         try:
             await self.canal_atual.edit(name=novo_nome)
-            await interaction.response.send_message(f"Nome alterado para: `{novo_nome}`", ephemeral=True)
+            await interaction.response.send_message(f"Nome alterado para: {novo_nome}", ephemeral=True)
             await log_acao("info", interaction.user, f"Canal renomeado para: {novo_nome}", 0x3498db)
         except Exception as e:
             await interaction.response.send_message(f"Erro: {str(e)[:100]}", ephemeral=True)
@@ -999,7 +968,7 @@ class FarmChannelView(View):
         if not farms:
             msg = "Nenhuma farm registrada."
         else:
-            msg = f"**HISTÓRICO - {self.user_name}**\n\n"
+            msg = f"HISTÓRICO - {self.user_name}\n\n"
             for i, f in enumerate(reversed(farms), 1):
                 msg += f"Farm #{i}\n"
                 for produto in f.get('produtos', []):
@@ -1027,12 +996,12 @@ class FarmChannelView(View):
             msg = "Nenhum pagamento recebido."
         else:
             total = sum(p["valor"] for p in pagamentos)
-            msg = f"**TOTAL RECEBIDO: R$ {total:,.2f}**\n\n"
+            msg = f"TOTAL RECEBIDO: R$ {total:,.2f}\n\n"
             for p in pagamentos[-10:]:
                 if p.get("tipo") == "Fechamento de Caixa Semanal":
-                    msg += f"📊 Fechamento: R$ {p['valor']:,.2f}\n   Salário: R$ {p.get('salario', 0):,.2f} | Extra: R$ {p.get('extra', 0):,.2f}\n"
+                    msg += f"Fechamento: R$ {p['valor']:,.2f}\n   Salário: R$ {p.get('salario', 0):,.2f} | Extra: R$ {p.get('extra', 0):,.2f}\n"
                 else:
-                    msg += f"💰 Pagamento: R$ {p['valor']:,.2f}\n"
+                    msg += f"Pagamento: R$ {p['valor']:,.2f}\n"
                 msg += f"   Admin: {p.get('admin_nome', 'Desconhecido')}\n   📅 {p['data']}\n\n"
         
         await interaction.response.send_message(msg, ephemeral=True)
@@ -1046,7 +1015,7 @@ class FarmChannelView(View):
         modal = PagamentoFarmModal(self.user_id, self.user_name, interaction.channel)
         await interaction.response.send_modal(modal)
     
-    @discord.ui.button(label="Fechar Caixa", style=discord.ButtonStyle.warning, emoji="📊", row=1)
+    @discord.ui.button(label="Fechar Caixa", style=discord.ButtonStyle.danger, emoji="📊", row=1)
     async def fechar_caixa(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
             await interaction.response.send_message("Apenas administradores!", ephemeral=True)
@@ -1128,7 +1097,7 @@ class ConfirmarFechamentoView(View):
         await interaction.response.send_message("Canal fechado!", ephemeral=True)
         
         await log_acao("fechar_canal", interaction.user, f"Canal {nome_canal} fechado", 0xff0000)
-        await log_admin("🗑️ CANAL FECHADO", f"Canal: {nome_canal}\nDono: {user.mention if user else 'Desconhecido'}", 0xff0000)
+        await log_admin("CANAL FECHADO", f"Canal: {nome_canal}\nDono: {user.mention if user else 'Desconhecido'}", 0xff0000)
     
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: Button):
@@ -1248,8 +1217,8 @@ class RemoverUsuarioModal(Modal, title="Remover Usuário do Sistema"):
             
             await limpar_logs_usuario(user_id, user.name)
             
-            await interaction.followup.send(f"✅ Usuário {user.mention} removido do sistema!", ephemeral=True)
-            await log_admin("👤 USUÁRIO REMOVIDO", f"**Usuário:** {user.mention}\n**Admin:** {interaction.user.mention}", 0xff0000)
+            await interaction.followup.send(f"Usuário {user.mention} removido do sistema!", ephemeral=True)
+            await log_admin("USUÁRIO REMOVIDO", f"Usuário: {user.mention}\nAdmin: {interaction.user.mention}", 0xff0000)
             await atualizar_ranking()
             
         except Exception as e:
@@ -1279,8 +1248,8 @@ class BackupView(View):
             json.dump(backup, f, ensure_ascii=False, indent=2)
         
         await criar_canal_backup("novo", backup_nome)
-        await interaction.followup.send("✅ Backup criado com sucesso!", ephemeral=True)
-        await log_admin("💾 BACKUP CRIADO", f"**Admin:** {interaction.user.mention}\n**Arquivo:** {backup_nome}", 0x00ff00)
+        await interaction.followup.send("Backup criado com sucesso!", ephemeral=True)
+        await log_admin("BACKUP CRIADO", f"Admin: {interaction.user.mention}\nArquivo: {backup_nome}", 0x00ff00)
     
     @discord.ui.button(label="Apagar Backups", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def apagar_backups(self, interaction: discord.Interaction, button: Button):
@@ -1290,7 +1259,6 @@ class BackupView(View):
         
         await interaction.response.defer(ephemeral=True, thinking=True)
         
-        # Procurar arquivos de backup
         backups_encontrados = []
         for arquivo in os.listdir('.'):
             if arquivo.startswith('backup_') and arquivo.endswith('.json'):
@@ -1300,13 +1268,12 @@ class BackupView(View):
             await interaction.followup.send("Nenhum backup encontrado!", ephemeral=True)
             return
         
-        # Criar canal de backup deletado
         for backup in backups_encontrados:
             await criar_canal_backup("deletado", backup)
             os.remove(backup)
         
-        await interaction.followup.send(f"✅ {len(backups_encontrados)} backup(s) deletado(s)!", ephemeral=True)
-        await log_admin("🗑️ BACKUPS DELETADOS", f"**Admin:** {interaction.user.mention}\n**Quantidade:** {len(backups_encontrados)}", 0xff0000)
+        await interaction.followup.send(f"{len(backups_encontrados)} backup(s) deletado(s)!", ephemeral=True)
+        await log_admin("BACKUPS DELETADOS", f"Admin: {interaction.user.mention}\nQuantidade: {len(backups_encontrados)}", 0xff0000)
 
 class AdminPanelView(View):
     def __init__(self):
@@ -1344,7 +1311,7 @@ class AdminPanelView(View):
         
         view = BackupView()
         embed = discord.Embed(
-            title="💾 GERENCIAR BACKUPS",
+            title="GERENCIAR BACKUPS",
             description="Escolha uma opção abaixo:\n\n"
                        "• **Criar Backup** - Salva todos os dados atuais\n"
                        "• **Apagar Backups** - Remove todos os arquivos de backup",
@@ -1412,7 +1379,7 @@ class BotaoCriarCanalView(View):
             salvar_dados()
             
             embed = discord.Embed(
-                title="🏭 SEU CANAL PRIVADO",
+                title="SEU CANAL PRIVADO",
                 description=f"Bem-vindo(a) {interaction.user.mention}!\n\n"
                            "Este é seu canal exclusivo para farms.\n"
                            "🔒 Apenas você e administradores têm acesso.\n\n"
@@ -1447,7 +1414,7 @@ async def admin_panel(ctx):
     
     view = AdminPanelView()
     embed = discord.Embed(
-        title="⚙️ PAINEL ADMINISTRATIVO",
+        title="PAINEL ADMINISTRATIVO",
         description="**Botões disponíveis:**\n\n"
                    "👑 **Adicionar Admin** - Dar cargo admin\n"
                    "🗑️ **Remover Admin** - Remover cargo admin\n"
@@ -1459,36 +1426,46 @@ async def admin_panel(ctx):
 
 # ========= EVENTOS =========
 @bot.event
+async def on_member_remove(member):
+    """Quando um membro sai do servidor"""
+    print(f"Usuário {member.name} ({member.id}) saiu do servidor!")
+    
+    if str(member.id) in dados["usuarios_banidos"]:
+        return
+    
+    await log_admin("USUÁRIO SAIU", f"Usuário: {member.mention}\nID: {member.id}\nIniciando limpeza...", 0xffa500)
+    await limpar_logs_usuario(member.id, member.name)
+    
+    if str(member.id) in dados["canais"]:
+        canal_id = dados["canais"][str(member.id)]
+        canal = member.guild.get_channel(canal_id)
+        if canal:
+            try:
+                await canal.delete(reason=f"Usuário {member.name} saiu do servidor")
+                await log_admin("CANAL REMOVIDO", f"Usuário: {member.mention}\nCanal: #{canal.name}", 0xff0000)
+            except:
+                pass
+        del dados["canais"][str(member.id)]
+        salvar_dados()
+    
+    await log_admin("LIMPEZA CONCLUÍDA", f"Usuário {member.mention} removido do sistema.", 0x00ff00)
+
+@bot.event
 async def on_ready():
-    print(f"✅ Bot {bot.user} está online!")
-    print(f"📊 Conectado a {len(bot.guilds)} servidores")
+    print(f"Bot {bot.user} está online!")
+    print(f"Conectado a {len(bot.guilds)} servidores")
     
-    # Verificar categorias
-    categorias = [
-        (CATEGORIA_BACKUP_ID, "Backup"),
-        (CATEGORIA_COMPRA_VENDA_LOGS_ID, "Compra/Venda Logs"),
-        (CATEGORIA_FARMS_ID, "Farms"),
-        (CATEGORIA_PAINEL_ID, "Painel")
-    ]
-    
-    for cat_id, nome in categorias:
-        cat = bot.get_channel(cat_id)
-        if cat:
-            print(f"✅ Categoria {nome} encontrada: {cat.name}")
-        else:
-            print(f"⚠️ Categoria {nome} ID {cat_id} não encontrada!")
-    
-    # Configurar canais
     for guild in bot.guilds:
-        # Canal de compra e venda
+        print(f"\nServidor: {guild.name}")
+        
         canal_vendas = bot.get_channel(CHAT_COMPRA_VENDA_ID)
-        if canal_vendas:
+        if canal_vendas and isinstance(canal_vendas, discord.TextChannel):
             async for msg in canal_vendas.history(limit=10):
                 if msg.author == bot.user:
                     await msg.delete()
             
             embed_vendas = discord.Embed(
-                title="🛒 SISTEMA DE COMPRA E VENDA",
+                title="SISTEMA DE COMPRA E VENDA",
                 description="Clique nos botões abaixo para registrar:\n\n"
                            "💸 **Venda de Munição**\n"
                            "🛒 **Compra de Produto**",
@@ -1496,14 +1473,13 @@ async def on_ready():
             )
             view_vendas = CompraVendaView()
             await canal_vendas.send(embed=embed_vendas, view=view_vendas)
-            print(f"✅ Canal de compra/venda configurado!")
+            print(f"Canal de compra/venda configurado!")
         
-        # Canal de criar canal
         categoria_painel = guild.get_channel(CATEGORIA_PAINEL_ID)
-        if categoria_painel:
+        if categoria_painel and isinstance(categoria_painel, discord.CategoryChannel):
             canal_criar = None
             for channel in categoria_painel.channels:
-                if channel.name == "criar-canal":
+                if channel.name == "criar-canal" and isinstance(channel, discord.TextChannel):
                     canal_criar = channel
                     break
             
@@ -1515,17 +1491,17 @@ async def on_ready():
                     await msg.delete()
             
             embed = discord.Embed(
-                title="🚀 SISTEMA DE FARM",
+                title="SISTEMA DE FARM",
                 description="Clique no botão abaixo para criar seu canal privado!\n\n🔒 Apenas você e os administradores terão acesso",
                 color=discord.Color.blue()
             )
             view = BotaoCriarCanalView()
             await canal_criar.send(embed=embed, view=view)
-            print(f"✅ Painel de criação configurado!")
+            print(f"Painel de criação configurado!")
     
     await atualizar_ranking()
-    await log_admin("🤖 BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)
-    print(f"\n🚀 BOT PRONTO!")
+    await log_admin("BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)
+    print(f"\nBOT PRONTO!")
 
 # ========= INICIAR =========
 if __name__ == "__main__":

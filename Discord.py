@@ -25,6 +25,7 @@ CATEGORIA_PAINEL_ID = int(os.getenv("CATEGORIA_PAINEL_ID", "1498111045489790987"
 CATEGORIA_BACKUP_ID = int(os.getenv("CATEGORIA_BACKUP_ID", "1498305209175380080"))
 CATEGORIA_COMPRA_VENDA_LOGS_ID = int(os.getenv("CATEGORIA_COMPRA_VENDA_LOGS_ID", "1498305956235448390"))
 CATEGORIA_ADMIN_PAINEL_ID = int(os.getenv("CATEGORIA_ADMIN_PAINEL_ID", "1498318907792953374"))
+CHAT_ADMIN_PAINEL_ID = int(os.getenv("CHAT_ADMIN_PAINEL_ID", "1498334105908150332"))  # Chat específico do painel admin
 CHAT_LOGS_ID = int(os.getenv("CHAT_LOGS_ID", "1498109309622550638"))
 CHAT_ADMIN_LOGS_ID = int(os.getenv("CHAT_ADMIN_LOGS_ID", "1498109569853816963"))
 CHAT_RANK_ID = int(os.getenv("CHAT_RANK_ID", "1498109956421976124"))
@@ -1651,7 +1652,7 @@ async def on_ready():
         # Verificar cargos
         cargo_admin = guild.get_role(CARGO_ADMIN_ID)
         if cargo_admin:
-            print(f"  Cargo Admin encontrado: {cargo_admin.name}")
+            print(f"  ✅ Cargo Admin encontrado: {cargo_admin.name}")
         else:
             print(f"  ⚠️ Cargo Admin ID {CARGO_ADMIN_ID} não encontrado!")
         
@@ -1671,7 +1672,9 @@ async def on_ready():
             )
             view_vendas = CompraVendaView()
             await canal_vendas.send(embed=embed_vendas, view=view_vendas)
-            print(f"  Canal de compra/venda configurado!")
+            print(f"  ✅ Canal de compra/venda configurado!")
+        else:
+            print(f"  ⚠️ Canal de compra/venda ID {CHAT_COMPRA_VENDA_ID} não encontrado!")
         
         # Canal de criar canal
         categoria_painel = guild.get_channel(CATEGORIA_PAINEL_ID)
@@ -1684,6 +1687,7 @@ async def on_ready():
             
             if not canal_criar:
                 canal_criar = await categoria_painel.create_text_channel("criar-canal")
+                print(f"  ✅ Canal 'criar-canal' criado!")
             
             async for msg in canal_criar.history(limit=5):
                 if msg.author == bot.user:
@@ -1696,7 +1700,9 @@ async def on_ready():
             )
             view = BotaoCriarCanalView()
             await canal_criar.send(embed=embed, view=view)
-            print(f"  Painel de criação configurado!")
+            print(f"  ✅ Painel de criação configurado!")
+        else:
+            print(f"  ⚠️ Categoria do painel ID {CATEGORIA_PAINEL_ID} não encontrada!")
         
         # Painel de Backup na categoria de backup
         categoria_backup = guild.get_channel(CATEGORIA_BACKUP_ID)
@@ -1709,6 +1715,7 @@ async def on_ready():
             
             if not canal_backup_painel:
                 canal_backup_painel = await categoria_backup.create_text_channel("painel-backup")
+                print(f"  ✅ Canal 'painel-backup' criado!")
             
             async for msg in canal_backup_painel.history(limit=5):
                 if msg.author == bot.user:
@@ -1723,43 +1730,41 @@ async def on_ready():
             )
             view_backup = BackupView()
             await canal_backup_painel.send(embed=embed_backup, view=view_backup)
-            print(f"  Painel de backup configurado na categoria de backup!")
-        
-        # ========= PAINEL ADMIN AUTOMÁTICO NA CATEGORIA ESPECIFICADA =========
-        categoria_admin = guild.get_channel(CATEGORIA_ADMIN_PAINEL_ID)
-        if categoria_admin and isinstance(categoria_admin, discord.CategoryChannel):
-            canal_admin_painel = None
-            for channel in categoria_admin.channels:
-                if channel.name == "painel-admin" and isinstance(channel, discord.TextChannel):
-                    canal_admin_painel = channel
-                    break
-            
-            if not canal_admin_painel:
-                canal_admin_painel = await categoria_admin.create_text_channel("painel-admin")
-                print(f"  Canal 'painel-admin' criado na categoria {categoria_admin.name}!")
-            
-            # Limpar mensagens antigas do bot
-            async for msg in canal_admin_painel.history(limit=10):
-                if msg.author == bot.user:
-                    await msg.delete()
-            
-            embed_admin = discord.Embed(
-                title="👑 PAINEL ADMINISTRATIVO",
-                description="**BOTÕES DISPONÍVEIS:**\n\n"
-                           "👑 **Adicionar Admin** - Dá cargo de administrador para um usuário\n"
-                           "🗑️ **Remover Admin** - Remove cargo de administrador\n"
-                           "👤❌ **Remover Usuário** - Remove um usuário do sistema e apaga todas as menções\n"
-                           "💾 **Gerenciar Backups** - Criar ou apagar backups do sistema",
-                color=discord.Color.purple()
-            )
-            view_admin = AdminPanelCategoriaView()
-            await canal_admin_painel.send(embed=embed_admin, view=view_admin)
-            print(f"  ✅ Painel administrativo configurado na categoria {categoria_admin.name}!")
+            print(f"  ✅ Painel de backup configurado!")
         else:
-            print(f"  ⚠️ Categoria de Admin ID {CATEGORIA_ADMIN_PAINEL_ID} NÃO ENCONTRADA!")
+            print(f"  ⚠️ Categoria de backup ID {CATEGORIA_BACKUP_ID} não encontrada!")
+        
+        # ========= PAINEL ADMIN NO CHAT ESPECÍFICO =========
+        # Usar o canal específico do painel admin
+        canal_admin_painel = bot.get_channel(CHAT_ADMIN_PAINEL_ID)
+        
+        if canal_admin_painel and isinstance(canal_admin_painel, discord.TextChannel):
+            # Verificar se o canal está na categoria correta
+            if canal_admin_painel.category_id == CATEGORIA_ADMIN_PAINEL_ID:
+                # Limpar mensagens antigas do bot
+                async for msg in canal_admin_painel.history(limit=10):
+                    if msg.author == bot.user:
+                        await msg.delete()
+                
+                embed_admin = discord.Embed(
+                    title="👑 PAINEL ADMINISTRATIVO",
+                    description="**BOTÕES DISPONÍVEIS:**\n\n"
+                               "👑 **Adicionar Admin** - Dá cargo de administrador para um usuário\n"
+                               "🗑️ **Remover Admin** - Remove cargo de administrador\n"
+                               "👤❌ **Remover Usuário** - Remove um usuário do sistema e apaga todas as menções\n"
+                               "💾 **Gerenciar Backups** - Criar ou apagar backups do sistema",
+                    color=discord.Color.purple()
+                )
+                view_admin = AdminPanelCategoriaView()
+                await canal_admin_painel.send(embed=embed_admin, view=view_admin)
+                print(f"  ✅ Painel administrativo configurado no canal #{canal_admin_painel.name}!")
+            else:
+                print(f"  ⚠️ Canal {canal_admin_painel.name} não está na categoria correta!")
+        else:
+            print(f"  ⚠️ Canal de Admin ID {CHAT_ADMIN_PAINEL_ID} não encontrado!")
     
     await atualizar_ranking()
-    await log_admin("BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)
+    await log_admin("🤖 BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)
     print(f"\n🚀 BOT PRONTO!")
 
 # ========= INICIAR =========

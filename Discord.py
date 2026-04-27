@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import aiohttp
+import re
 
 # ========= CONFIGURAÇÕES =========
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -32,7 +33,8 @@ dados = {
     "admins": [],
     "config": {},
     "caixa_semana": {},
-    "compras_vendas": []
+    "compras_vendas": [],
+    "usuarios_banidos": []  # Lista de usuários que saíram para não limpar novamente
 }
 
 # ========= FUNÇÕES AUXILIARES =========
@@ -54,9 +56,93 @@ def carregar_dados():
         print("Novo banco de dados")
         return False
 
+# ========= FUNÇÃO PARA ANONIMIZAR MENSAGENS =========
+async def anonimizar_mensagens_canal(canal, user_id, user_name):
+    """Substitui menções do usuário por [USUÁRIO REMOVIDO] em um canal específico"""
+    if not canal or not isinstance(canal, discord.TextChannel):
+        return 0
+    
+    contador = 0
+    try:
+        async for mensagem in canal.history(limit=None):
+            if mensagem.author == bot.user:
+                # Verificar se a mensagem contém menção ao usuário
+                if f"<@{user_id}>" in mensagem.content or f"<@!{user_id}>" in mensagem.content:
+                    novo_conteudo = mensagem.content.replace(f"<@{user_id}>", f"[USUÁRIO REMOVIDO - {user_name}]")
+                    novo_conteudo = novo_conteudo.replace(f"<@!{user_id}>", f"[USUÁRIO REMOVIDO - {user_name}]")
+                    
+                    try:
+                        await mensagem.edit(content=novo_conteudo)
+                        contador += 1
+                    except:
+                        pass
+    except Exception as e:
+        print(f"Erro ao anonimizar mensagens em {canal.name}: {e}")
+    
+    return contador
+
+async def limpar_logs_usuario(user_id, user_name):
+    """Limpa todas as referências ao usuário nos logs e canais"""
+    if str(user_id) in dados["usuarios_banidos"]:
+        return
+    
+    dados["usuarios_banidos"].append(str(user_id))
+    total_limpo = 0
+    
+    # Canais para verificar
+    canais_para_verificar = [
+        CHAT_LOGS_ID,
+        CHAT_ADMIN_LOGS_ID,
+        CHAT_RANK_ID,
+        CHAT_COMPRA_VENDA_ID
+    ]
+    
+    # Verificar logs nos canais principais
+    for canal_id in canais_para_verificar:
+        canal = bot.get_channel(canal_id)
+        if canal:
+            count = await anonimizar_mensagens_canal(canal, user_id, user_name)
+            total_limpo += count
+            print(f"  Anonimizado {count} mensagens em #{canal.name}")
+    
+    # Verificar canais privados de farms
+    for canal_id in dados["canais"].values():
+        canal = bot.get_channel(canal_id)
+        if canal:
+            count = await anonimizar_mensagens_canal(canal, user_id, user_name)
+            total_limpo += count
+    
+    # Remover usuário do ranking (zerar dados)
+    if str(user_id) in dados["usuarios"]:
+        # Salvar backup do usuário antes de remover
+        backup_usuario = dados["usuarios"][str(user_id)].copy()
+        
+        # Criar registro anônimo
+        dados["usuarios"][str(user_id)] = {
+            "farms": [],
+            "pagamentos": [],
+            "nome": f"[REMOVIDO - {user_name}]",
+            "removido_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "removido_por": "sistema"
+        }
+        salvar_dados()
+        
+        # Registrar log
+        await log_admin(
+            "👤 USUÁRIO REMOVIDO DO SISTEMA",
+            f"**Usuário:** {user_name} (ID: {user_id})\n"
+            f"**Motivo:** Saiu do servidor\n"
+            f"**Mensagens anonimizadas:** {total_limpo}\n"
+            f"**Dados removidos do ranking**",
+            0xff0000
+        )
+        
+        print(f"✅ Usuário {user_name} ({user_id}) foi removido do sistema. {total_limpo} mensagens anonimizadas.")
+    
+    salvar_dados()
+
 # ========= FUNÇÕES PARA ENVIAR LOGS =========
 async def log_acao(acao, usuario, detalhes, cor=None):
-    """Envia log para o canal de logs"""
     cores = {
         "criar_canal": 0x00ff00,
         "registrar_farm": 0x00ff00,
@@ -68,7 +154,8 @@ async def log_acao(acao, usuario, detalhes, cor=None):
         "info": 0x3498db,
         "admin": 0x9b59b6,
         "setar_admin": 0x9b59b6,
-        "compra_venda": 0x00ff00
+        "compra_venda": 0x00ff00,
+        "usuario_removido": 0xff0000
     }
     
     cor_final = cores.get(acao, 0x3498db) if cor is None else cor
@@ -89,7 +176,6 @@ async def log_acao(acao, usuario, detalhes, cor=None):
         await canal_logs.send(embed=embed)
 
 async def log_admin(titulo, descricao, cor=0xffa500):
-    """Envia log para o canal de admin logs"""
     canal_admin = bot.get_channel(CHAT_ADMIN_LOGS_ID)
     if canal_admin and isinstance(canal_admin, discord.TextChannel):
         embed = discord.Embed(
@@ -101,7 +187,6 @@ async def log_admin(titulo, descricao, cor=0xffa500):
         await canal_admin.send(embed=embed)
 
 async def log_criar_canal(usuario, canal):
-    """Log específico para criação de canal"""
     canal_admin = bot.get_channel(CHAT_ADMIN_LOGS_ID)
     if canal_admin and isinstance(canal_admin, discord.TextChannel):
         embed = discord.Embed(
@@ -133,45 +218,7 @@ def is_admin(member) -> bool:
     
     return False
 
-# ========= FUNÇÕES PARA RANKING =========
-async def resetar_ranking(interaction: discord.Interaction = None):
-    """Reseta todo o ranking (apenas admin)"""
-    if interaction and not is_admin(interaction.user):
-        await interaction.response.send_message("Apenas administradores podem resetar o ranking!", ephemeral=True)
-        return False
-    
-    # Salvar backup antes de resetar
-    backup = {
-        "usuarios": dados["usuarios"].copy(),
-        "data_backup": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "admin": interaction.user.name if interaction else "Sistema"
-    }
-    
-    # Salvar backup em arquivo
-    with open(f"backup_rank_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", "w", encoding="utf-8") as f:
-        json.dump(backup, f, ensure_ascii=False, indent=2)
-    
-    # Resetar dados do ranking (manter admins e configurações)
-    dados["usuarios"] = {}
-    dados["caixa_semana"] = {}
-    salvar_dados()
-    
-    # Registrar log
-    await log_acao(
-        "reset_rank",
-        interaction.user if interaction else None,
-        f"Ranking foi resetado por {interaction.user.mention if interaction else 'Sistema'}\nBackup salvo.",
-        0xff0000
-    )
-    
-    await log_admin(
-        "RANKING RESETADO",
-        f"**Admin:** {interaction.user.mention if interaction else 'Sistema'}\n**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}\n**Backup salvo**",
-        0xff0000
-    )
-    
-    return True
-
+# ========= FUNÇÃO PARA ATUALIZAR RANKING =========
 async def atualizar_ranking():
     """Atualiza o canal de ranking com todas as categorias"""
     canal_rank = bot.get_channel(CHAT_RANK_ID)
@@ -189,25 +236,54 @@ async def atualizar_ranking():
     
     usuarios_data = []
     for user_id, data in dados["usuarios"].items():
+        # Pular usuários removidos
+        if "removido_em" in data:
+            continue
+            
         try:
             user = await bot.fetch_user(int(user_id))
-            total_farms = sum(f["quantidade"] for f in data["farms"])
+            
+            # Totais por produto
+            total_chumbo = 0
+            total_capsula = 0
+            total_polvora = 0
+            total_geral = 0
+            
+            for farm in data["farms"]:
+                for produto in farm.get("produtos", []):
+                    qtd = produto["quantidade"]
+                    total_geral += qtd
+                    
+                    if produto["produto"] == "CHUMBO":
+                        total_chumbo += qtd
+                    elif produto["produto"] == "CAPSULA":
+                        total_capsula += qtd
+                    elif produto["produto"] == "POLVORA":
+                        total_polvora += qtd
+            
             total_pagamentos = sum(p["valor"] for p in data["pagamentos"])
-            dinheiro_sujo = total_farms - total_pagamentos
+            dinheiro_sujo = total_geral - total_pagamentos
             
             usuarios_data.append({
                 "nome": user.name,
                 "user_id": user_id,
-                "total_farms": total_farms,
+                "total_geral": total_geral,
+                "total_chumbo": total_chumbo,
+                "total_capsula": total_capsula,
+                "total_polvora": total_polvora,
                 "total_pagamentos": total_pagamentos,
                 "dinheiro_sujo": max(0, dinheiro_sujo)
             })
         except:
             continue
     
-    ranking_farms = sorted(usuarios_data, key=lambda x: x["total_farms"], reverse=True)[:10]
-    ranking_dinheiro_sujo = sorted(usuarios_data, key=lambda x: x["dinheiro_sujo"], reverse=True)[:10]
-    ranking_pagamentos = sorted(usuarios_data, key=lambda x: x["total_pagamentos"], reverse=True)[:10]
+    # Rankings por produto
+    ranking_chumbo = sorted(usuarios_data, key=lambda x: x["total_chumbo"], reverse=True)[:5]
+    ranking_capsula = sorted(usuarios_data, key=lambda x: x["total_capsula"], reverse=True)[:5]
+    ranking_polvora = sorted(usuarios_data, key=lambda x: x["total_polvora"], reverse=True)[:5]
+    
+    # Ranking geral (Meta Farm)
+    ranking_geral = sorted(usuarios_data, key=lambda x: x["total_geral"], reverse=True)[:5]
     
     embed = discord.Embed(
         title="RANKING GERAL",
@@ -215,23 +291,36 @@ async def atualizar_ranking():
         color=discord.Color.gold()
     )
     
+    # Ranking GERAL (Meta Farm)
     ranking_text = ""
-    for i, u in enumerate(ranking_farms, 1):
+    for i, u in enumerate(ranking_geral, 1):
         medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}°"
-        ranking_text += f"{medalha} **{u['nome']}** - {u['total_farms']:,} itens\n"
+        ranking_text += f"{medalha} **{u['nome']}** - {u['total_geral']:,} itens\n"
     embed.add_field(name="META FARM", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
     
+    # Ranking CHUMBO
     ranking_text = ""
-    for i, u in enumerate(ranking_dinheiro_sujo, 1):
+    for i, u in enumerate(ranking_chumbo, 1):
         medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}°"
-        ranking_text += f"{medalha} **{u['nome']}** - R$ {u['dinheiro_sujo']:,}\n"
-    embed.add_field(name="DINHEIRO SUJO", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
+        if u['total_chumbo'] > 0:
+            ranking_text += f"{medalha} **{u['nome']}** - {u['total_chumbo']:,} itens\n"
+    embed.add_field(name="CHUMBO", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
     
+    # Ranking CAPSULA
     ranking_text = ""
-    for i, u in enumerate(ranking_pagamentos, 1):
+    for i, u in enumerate(ranking_capsula, 1):
         medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}°"
-        ranking_text += f"{medalha} **{u['nome']}** - R$ {u['total_pagamentos']:,}\n"
-    embed.add_field(name="TOP MONEY", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
+        if u['total_capsula'] > 0:
+            ranking_text += f"{medalha} **{u['nome']}** - {u['total_capsula']:,} itens\n"
+    embed.add_field(name="CAPSULA", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
+    
+    # Ranking POLVORA
+    ranking_text = ""
+    for i, u in enumerate(ranking_polvora, 1):
+        medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}°"
+        if u['total_polvora'] > 0:
+            ranking_text += f"{medalha} **{u['nome']}** - {u['total_polvora']:,} itens\n"
+    embed.add_field(name="POLVORA", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
     
     embed.set_footer(text="Use os botões abaixo para gerenciar o ranking")
     
@@ -250,12 +339,10 @@ class RankingView(View):
     
     @discord.ui.button(label="Resetar Ranking", style=discord.ButtonStyle.danger, emoji="⚠️")
     async def resetar(self, interaction: discord.Interaction, button: Button):
-        # Verificar se é admin
         if not is_admin(interaction.user):
             await interaction.response.send_message("Apenas administradores podem resetar o ranking!", ephemeral=True)
             return
         
-        # Criar view de confirmação
         view = ConfirmarResetView()
         await interaction.response.send_message(
             "⚠️ **ATENÇÃO!** ⚠️\n\n"
@@ -278,16 +365,25 @@ class ConfirmarResetView(View):
     async def confirmar(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(ephemeral=True, thinking=True)
         
-        # Resetar ranking
-        sucesso = await resetar_ranking(interaction)
+        # Salvar backup
+        backup = {
+            "usuarios": dados["usuarios"].copy(),
+            "data_backup": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "admin": interaction.user.name
+        }
         
-        if sucesso:
-            await interaction.followup.send("✅ Ranking resetado com sucesso! Um backup foi salvo.", ephemeral=True)
-            # Atualizar o ranking para mostrar vazio
-            await atualizar_ranking()
-        else:
-            await interaction.followup.send("❌ Erro ao resetar ranking.", ephemeral=True)
+        with open(f"backup_rank_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", "w", encoding="utf-8") as f:
+            json.dump(backup, f, ensure_ascii=False, indent=2)
         
+        dados["usuarios"] = {}
+        dados["caixa_semana"] = {}
+        salvar_dados()
+        
+        await log_acao("reset_rank", interaction.user, f"Ranking resetado por {interaction.user.mention}", 0xff0000)
+        await log_admin("RANKING RESETADO", f"**Admin:** {interaction.user.mention}\n**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0xff0000)
+        
+        await interaction.followup.send("✅ Ranking resetado com sucesso! Um backup foi salvo.", ephemeral=True)
+        await atualizar_ranking()
         self.stop()
     
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
@@ -359,49 +455,52 @@ class FarmModal(Modal, title="Registrar Nova Farm"):
         if str(self.user_id) not in dados["usuarios"]:
             dados["usuarios"][str(self.user_id)] = {"farms": [], "pagamentos": [], "nome": self.user_name}
         
-        registros = []
-        for produto in produtos_registrados:
-            farm_registro = {
-                "produto": produto["produto"],
-                "quantidade": produto["quantidade"],
-                "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "print_url": self.imagem_url,
-                "validado": True
-            }
-            dados["usuarios"][str(self.user_id)]["farms"].append(farm_registro)
-            registros.append(farm_registro)
+        # Registrar como UMA ÚNICA FARM (não uma por produto)
+        farm_registro = {
+            "produtos": produtos_registrados,
+            "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "print_url": self.imagem_url,
+            "validado": True,
+            "farm_id": len(dados["usuarios"][str(self.user_id)]["farms"]) + 1
+        }
         
+        dados["usuarios"][str(self.user_id)]["farms"].append(farm_registro)
         salvar_dados()
         
+        # Criar embed de resumo
         embed = discord.Embed(
-            title="FARMS REGISTRADAS COM SUCESSO",
+            title="FARM REGISTRADA COM SUCESSO",
             color=discord.Color.green()
         )
         
         descricao = ""
-        for reg in registros:
-            descricao += f"**{reg['produto']}:** {reg['quantidade']} itens\n"
+        for produto in produtos_registrados:
+            if produto["produto"] == "CHUMBO":
+                descricao += f"🔫 **{produto['produto']}:** {produto['quantidade']} itens\n"
+            elif produto["produto"] == "CAPSULA":
+                descricao += f"💣 **{produto['produto']}:** {produto['quantidade']} itens\n"
+            elif produto["produto"] == "POLVORA":
+                descricao += f"💥 **{produto['produto']}:** {produto['quantidade']} itens\n"
         
         embed.description = descricao
         embed.add_field(name="Data do registro", value=datetime.now().strftime("%d/%m/%Y às %H:%M"), inline=False)
         embed.add_field(name="Total de farms", value=f"{len(dados['usuarios'][str(self.user_id)]['farms'])} farms registradas", inline=False)
         embed.set_image(url=self.imagem_url)
-        embed.set_footer(text="Obrigado por registrar suas farms!")
-        
-        total_itens = sum(reg["quantidade"] for reg in registros)
+        embed.set_footer(text="Obrigado por registrar sua farm!")
         
         await interaction.followup.send(embed=embed, ephemeral=True)
         
-        produtos_str = ", ".join([f"{p['produto']}: {p['quantidade']}" for p in registros])
+        # Log
+        produtos_str = ", ".join([f"{p['produto']}: {p['quantidade']}" for p in produtos_registrados])
         await log_acao(
             "registrar_farm",
             interaction.user,
-            f"**Canal:** {self.canal_nome}\n**Produtos:** {produtos_str}\n**Total de itens:** {total_itens}"
+            f"**Canal:** {self.canal_nome}\n**Produtos:** {produtos_str}"
         )
         
         await log_admin(
             "NOVA FARM REGISTRADA",
-            f"**Usuário:** {interaction.user.mention}\n**Canal:** {self.canal_nome}\n**Produtos:**\n{produtos_str}\n**Total de itens:** {total_itens}",
+            f"**Usuário:** {interaction.user.mention}\n**Canal:** {self.canal_nome}\n**Produtos:**\n{produtos_str}",
             0x00ff00
         )
         
@@ -409,9 +508,9 @@ class FarmModal(Modal, title="Registrar Nova Farm"):
 
 # ========= MODAL PARA FECHAMENTO DE CAIXA =========
 class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
-    meta_farm = TextInput(
-        label="Meta de Farm",
-        placeholder="Ex: 5000",
+    bateu_meta = TextInput(
+        label="Bateu a Meta?",
+        placeholder="Digite SIM ou NAO",
         required=True,
         style=discord.TextStyle.short
     )
@@ -447,12 +546,19 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
         
         await interaction.response.defer(ephemeral=True, thinking=True)
         
+        # Validar resposta da meta
+        bateu_meta_text = self.bateu_meta.value.strip().upper()
+        if bateu_meta_text not in ["SIM", "NAO", "S", "N"]:
+            await interaction.followup.send("Resposta inválida! Digite SIM ou NAO para saber se bateu a meta.", ephemeral=True)
+            return
+        
+        bateu_meta = "✅ SIM" if bateu_meta_text in ["SIM", "S"] else "❌ NAO"
+        
         try:
-            meta = float(self.meta_farm.value.replace(",", "."))
             sujo = float(self.farm_sujo.value.replace(",", "."))
             salario_valor = float(self.salario.value.replace(",", "."))
             extra_valor = float(self.extra.value.replace(",", "."))
-            total = meta + sujo + salario_valor + extra_valor
+            total = sujo + salario_valor + extra_valor
         except ValueError:
             await interaction.followup.send("Valores inválidos! Use apenas números.", ephemeral=True)
             return
@@ -469,7 +575,9 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             "admin_nome": interaction.user.name,
             "tipo": "Fechamento de Caixa Semanal",
             "salario": salario_valor,
-            "extra": extra_valor
+            "extra": extra_valor,
+            "bateu_meta": bateu_meta,
+            "farm_sujo": sujo
         })
         
         fechamento = {
@@ -478,7 +586,7 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             "admin_id": interaction.user.id,
             "usuario": self.user_name,
             "usuario_id": self.user_id,
-            "meta_farm": meta,
+            "bateu_meta": bateu_meta,
             "farm_sujo": sujo,
             "salario": salario_valor,
             "extra": extra_valor,
@@ -501,6 +609,8 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
                 description=f"Você recebeu um pagamento referente ao fechamento de caixa!",
                 color=discord.Color.green()
             )
+            embed_notificacao.add_field(name="Bateu a Meta?", value=bateu_meta, inline=True)
+            embed_notificacao.add_field(name="Farm Sujo", value=f"R$ {sujo:,.2f}", inline=True)
             embed_notificacao.add_field(name="Salário", value=f"R$ {salario_valor:,.2f}", inline=True)
             embed_notificacao.add_field(name="Extra", value=f"R$ {extra_valor:,.2f}", inline=True)
             embed_notificacao.add_field(name="Total Recebido", value=f"R$ {valor_pagamento:,.2f}", inline=True)
@@ -517,7 +627,7 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             timestamp=datetime.now()
         )
         
-        embed.add_field(name="Meta de Farm", value=f"R$ {meta:,.2f}", inline=True)
+        embed.add_field(name="Bateu a Meta?", value=bateu_meta, inline=True)
         embed.add_field(name="Farm Sujo", value=f"R$ {sujo:,.2f}", inline=True)
         embed.add_field(name="Salário", value=f"R$ {salario_valor:,.2f}", inline=True)
         embed.add_field(name="Extra", value=f"R$ {extra_valor:,.2f}", inline=True)
@@ -536,7 +646,7 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
         await interaction.followup.send(
             f"Fechamento de caixa registrado!\n\n"
             f"Resumo:\n"
-            f"Meta Farm: R$ {meta:,.2f}\n"
+            f"Bateu a Meta? {bateu_meta}\n"
             f"Farm Sujo: R$ {sujo:,.2f}\n"
             f"Salário: R$ {salario_valor:,.2f}\n"
             f"Extra: R$ {extra_valor:,.2f}\n"
@@ -549,7 +659,7 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             "fechar_caixa",
             interaction.user,
             f"**Usuário:** {self.user_name}\n"
-            f"**Meta Farm:** R$ {meta}\n"
+            f"**Bateu a Meta?:** {bateu_meta}\n"
             f"**Farm Sujo:** R$ {sujo}\n"
             f"**Salário:** R$ {salario_valor}\n"
             f"**Extra:** R$ {extra_valor}\n"
@@ -562,6 +672,8 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             "FECHAMENTO DE CAIXA",
             f"**Usuário:** {self.user_name}\n"
             f"**Admin:** {interaction.user.mention}\n"
+            f"**Bateu a Meta?:** {bateu_meta}\n"
+            f"**Farm Sujo:** R$ {sujo:,.2f}\n"
             f"**Salário:** R$ {salario_valor:,.2f}\n"
             f"**Extra:** R$ {extra_valor:,.2f}\n"
             f"**Total Pago:** R$ {valor_pagamento:,.2f}",
@@ -586,7 +698,7 @@ class VendaModal(Modal, title="Venda de Munição"):
     )
     faccao_compradora = TextInput(
         label="Facção Compradora",
-        placeholder="Ex: Primeiro Comando, Família do Norte, etc",
+        placeholder="Ex: Primeiro Comando",
         required=True,
         style=discord.TextStyle.short
     )
@@ -668,7 +780,7 @@ class CompraModal(Modal, title="Compra de Produto"):
     )
     faccao_vendedora = TextInput(
         label="Facção Vendedora",
-        placeholder="Ex: Primeiro Comando, Família do Norte, etc",
+        placeholder="Ex: Primeiro Comando",
         required=True,
         style=discord.TextStyle.short
     )
@@ -847,10 +959,14 @@ class FarmChannelView(View):
             msg = f"**SEUS ÚLTIMOS REGISTROS - {self.user_name}**\n\n"
             for i, f in enumerate(reversed(farms), 1):
                 msg += f"Farm #{i}\n"
-                msg += f"{f.get('produto', 'Desconhecido')}\n"
-                msg += f"{f['quantidade']} itens\n"
-                msg += f"{f['data']}\n"
-                msg += f"[Print]({f['print_url']})\n\n"
+                for produto in f.get('produtos', []):
+                    if produto['produto'] == "CHUMBO":
+                        msg += f"🔫 CHUMBO: {produto['quantidade']} itens\n"
+                    elif produto['produto'] == "CAPSULA":
+                        msg += f"💣 CAPSULA: {produto['quantidade']} itens\n"
+                    elif produto['produto'] == "POLVORA":
+                        msg += f"💥 POLVORA: {produto['quantidade']} itens\n"
+                msg += f"📅 {f['data']}\n📸 [Print]({f['print_url']})\n\n"
         
         if len(msg) > 1900:
             with open(f"historico_{self.user_id}.txt", "w", encoding="utf-8") as f:
@@ -878,6 +994,8 @@ class FarmChannelView(View):
                 tipo = p.get("tipo", "Pagamento")
                 if tipo == "Fechamento de Caixa Semanal":
                     msg += f"**{tipo}**\n"
+                    msg += f"   Bateu a Meta? {p.get('bateu_meta', 'N/A')}\n"
+                    msg += f"   Farm Sujo: R$ {p.get('farm_sujo', 0):,.2f}\n"
                     msg += f"   Salário: R$ {p.get('salario', 0):,.2f}\n"
                     msg += f"   Extra: R$ {p.get('extra', 0):,.2f}\n"
                     msg += f"   Total: R$ {p['valor']:,.2f}\n"
@@ -937,7 +1055,7 @@ class FarmChannelView(View):
             
             embed.add_field(
                 name=f"📅 {data}",
-                value=f"Meta Farm: R$ {fech['meta_farm']:,.2f}\n"
+                value=f"Bateu a Meta? {fech.get('bateu_meta', 'N/A')}\n"
                       f"Farm Sujo: R$ {fech['farm_sujo']:,.2f}\n"
                       f"Salário: R$ {fech['salario']:,.2f}\n"
                       f"Extra: R$ {fech['extra']:,.2f}\n"
@@ -1162,12 +1280,15 @@ class AdminPanelView(View):
         ranking = []
         
         for user_id, data in dados["usuarios"].items():
+            if "removido_em" in data:
+                continue
             total = 0
             for farm in data["farms"]:
                 try:
                     data_farm = datetime.strptime(farm["data"], "%Y-%m-%d %H:%M:%S")
                     if data_farm >= semana_atras:
-                        total += farm["quantidade"]
+                        for produto in farm.get("produtos", []):
+                            total += produto["quantidade"]
                 except:
                     pass
             if total > 0:
@@ -1198,13 +1319,18 @@ class AdminPanelView(View):
         
         await interaction.response.defer(ephemeral=True, thinking=True)
         
-        relatorio = f"RELATÓRIO GERAL\n📅 {datetime.now().strftime('%d/%m/%Y')}\nUsuários: {len(dados['usuarios'])}\nAdmins: {len(dados['admins'])}\n\n"
+        relatorio = f"RELATÓRIO GERAL\n📅 {datetime.now().strftime('%d/%m/%Y')}\nUsuários ativos: {len([u for u in dados['usuarios'].values() if 'removido_em' not in u])}\nAdmins: {len(dados['admins'])}\n\n"
         
         for user_id, data in dados["usuarios"].items():
+            if "removido_em" in data:
+                continue
             try:
                 user = await interaction.client.fetch_user(int(user_id))
                 total_farms = len(data["farms"])
-                total_qtd = sum(f["quantidade"] for f in data["farms"])
+                total_qtd = 0
+                for farm in data["farms"]:
+                    for produto in farm.get("produtos", []):
+                        total_qtd += produto["quantidade"]
                 total_pag = sum(p["valor"] for p in data["pagamentos"])
                 relatorio += f"{user.name}:\n   Farms: {total_farms}\n   Total: {total_qtd}\n   Recebido: R$ {total_pag:,.2f}\n\n"
             except:
@@ -1364,10 +1490,79 @@ class BotaoCriarCanalView(View):
                 content=f"Erro: {str(e)[:200]}"
             )
 
+# ========= COMANDO PARA REMOVER USUÁRIO MANUALMENTE =========
+@bot.command(name="remover_usuario")
+async def remover_usuario_comando(ctx, user_id: int = None):
+    """Remove um usuário do sistema (apenas admin)"""
+    if not is_admin(ctx.author):
+        await ctx.send("Apenas administradores!")
+        return
+    
+    if not user_id:
+        await ctx.send("Uso: !remover_usuario <ID>")
+        return
+    
+    try:
+        user = await bot.fetch_user(user_id)
+        nome = user.name
+        
+        await ctx.send(f"🔄 Removendo usuário {user.name} ({user_id}) do sistema...")
+        
+        await limpar_logs_usuario(user_id, nome)
+        
+        await ctx.send(f"✅ Usuário {user.mention} foi removido do sistema!\nTodas as menções foram anonimizadas.")
+        
+    except Exception as e:
+        await ctx.send(f"Erro ao remover usuário: {e}")
+
+# ========= EVENTO DE MEMBRO SAINDO =========
+@bot.event
+async def on_member_remove(member):
+    """Quando um membro sai do servidor, limpa todas as referências dele"""
+    print(f"👤 Usuário {member.name} ({member.id}) saiu do servidor!")
+    
+    # Verificar se já foi removido antes
+    if str(member.id) in dados["usuarios_banidos"]:
+        return
+    
+    # Log no canal de admin
+    await log_admin(
+        "👤 USUÁRIO SAIU DO SERVIDOR",
+        f"**Usuário:** {member.mention}\n**ID:** {member.id}\n**Nome:** {member.name}\n\n"
+        f"🔃 Iniciando limpeza das referências deste usuário no sistema...",
+        0xffa500
+    )
+    
+    # Limpar logs e referências
+    await limpar_logs_usuario(member.id, member.name)
+    
+    # Se o usuário tinha um canal privado, fechar
+    if str(member.id) in dados["canais"]:
+        canal_id = dados["canais"][str(member.id)]
+        canal = member.guild.get_channel(canal_id)
+        if canal:
+            try:
+                await canal.delete(reason=f"Usuário {member.name} saiu do servidor")
+                await log_admin(
+                    "🗑️ CANAL PRIVADO REMOVIDO",
+                    f"**Usuário:** {member.mention}\n**Canal:** #{canal.name}\n**Motivo:** Usuário saiu do servidor",
+                    0xff0000
+                )
+            except:
+                pass
+        del dados["canais"][str(member.id)]
+        salvar_dados()
+    
+    await log_admin(
+        "✅ LIMPEZA CONCLUÍDA",
+        f"**Usuário:** {member.mention}\n"
+        f"Todas as referências foram anonimizadas e o usuário foi removido do ranking.",
+        0x00ff00
+    )
+
 # ========= COMANDOS =========
 @bot.command(name="admin")
 async def admin_panel(ctx):
-    """Painel administrativo"""
     if not is_admin(ctx.author):
         await ctx.send("Acesso negado! Apenas administradores.")
         return
@@ -1391,7 +1586,6 @@ async def admin_panel(ctx):
 
 @bot.command(name="atualizar_rank")
 async def atualizar_rank_comando(ctx):
-    """Atualiza o ranking manualmente"""
     if not is_admin(ctx.author):
         await ctx.send("Apenas administradores!")
         return
@@ -1401,7 +1595,6 @@ async def atualizar_rank_comando(ctx):
 
 @bot.command(name="resetar_rank")
 async def resetar_rank_comando(ctx):
-    """Reseta o ranking (apenas admin)"""
     if not is_admin(ctx.author):
         await ctx.send("Apenas administradores!")
         return
@@ -1424,19 +1617,6 @@ async def resetar_rank_comando(ctx):
 async def on_ready():
     print(f"Bot {bot.user} está online!")
     print(f"Conectado a {len(bot.guilds)} servidores")
-    
-    # Verificar canais de log
-    canal_logs = bot.get_channel(CHAT_LOGS_ID)
-    if canal_logs:
-        print(f"Canal de logs encontrado: #{canal_logs.name}")
-    else:
-        print(f"Canal de logs ID {CHAT_LOGS_ID} NÃO ENCONTRADO!")
-    
-    canal_admin_logs = bot.get_channel(CHAT_ADMIN_LOGS_ID)
-    if canal_admin_logs:
-        print(f"Canal de admin logs encontrado: #{canal_admin_logs.name}")
-    else:
-        print(f"Canal de admin logs ID {CHAT_ADMIN_LOGS_ID} NÃO ENCONTRADO!")
     
     for guild in bot.guilds:
         print(f"\nServidor: {guild.name}")
@@ -1514,11 +1694,10 @@ async def on_ready():
     
     await atualizar_ranking()
     
-    # Enviar mensagem de boas vindas nos canais de log
-    await log_admin("BOT INICIADO", f"Bot {bot.user.mention} está online!\nComandos: !admin, !atualizar_rank, !resetar_rank", 0x00ff00)
+    await log_admin("BOT INICIADO", f"Bot {bot.user.mention} está online!\nComandos: !admin, !atualizar_rank, !resetar_rank, !remover_usuario", 0x00ff00)
     
     print(f"\nBOT PRONTO!")
-    print(f"Comandos: !admin, !atualizar_rank, !resetar_rank")
+    print(f"Comandos: !admin, !atualizar_rank, !resetar_rank, !remover_usuario")
 
 # ========= INICIAR =========
 if __name__ == "__main__":

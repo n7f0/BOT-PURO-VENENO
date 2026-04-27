@@ -474,7 +474,6 @@ class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
             await interaction.followup.send("Valor inválido!", ephemeral=True)
             return
         
-        # Agora pede a print depois de preencher
         await interaction.followup.send("📸 Agora envie a **print do comprovante de dinheiro sujo** aqui no canal.", ephemeral=True)
         
         def check(m):
@@ -500,26 +499,22 @@ class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
         
         embed = discord.Embed(
             title="💰 DINHEIRO SUJO REGISTRADO",
-            description=f"**Usuário:** {self.user_name}\n**Valor:** R$ {valor:,.2f}\n**Admin:** {interaction.user.mention}",
+            description=f"**Usuário:** <@{self.user_id}>\n**Valor:** R$ {valor:,.2f}\n**Admin:** {interaction.user.mention}",
             color=discord.Color.red(),
             timestamp=datetime.now()
         )
         embed.set_image(url=imagem_url)
         await self.canal.send(embed=embed)
         
-        # Enviar também para o canal de logs de registros
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros and isinstance(canal_registros, discord.TextChannel):
             await canal_registros.send(embed=embed)
         
-        # Aguarda 10 segundos e depois apaga a print
         await asyncio.sleep(10)
         await msg.delete()
         
         await interaction.followup.send(f"R$ {valor:,.2f} registrado como dinheiro sujo para {self.user_name}!", ephemeral=True)
-        
         await log_acao("registrar_dinheiro_sujo", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xff0000)
-        
         await atualizar_ranking()
 
 # ========= MODAL PARA REGISTRAR PRODUTOS (FARM PRODUTOS) =========
@@ -582,7 +577,6 @@ class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
             await interaction.followup.send("Nenhum produto válido! Preencha pelo menos um produto.", ephemeral=True)
             return
         
-        # Agora pede a print depois de preencher
         await interaction.followup.send("📸 Agora envie a **print da farm** aqui no canal.", ephemeral=True)
         
         def check(m):
@@ -613,31 +607,30 @@ class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
         
         embed = discord.Embed(
             title="FARM PRODUTOS REGISTRADA COM SUCESSO",
+            description=f"**Usuário:** <@{self.user_id}>\n",
             color=discord.Color.green()
         )
         
         descricao = ""
         for produto in produtos_registrados:
             if produto["produto"] == "CHUMBO":
-                descricao += f"🔫 **{produto['produto']}:** {produto['quantidade']} itens\n"
+                descricao += f"🔫 **CHUMBO:** {produto['quantidade']} itens\n"
             elif produto["produto"] == "CAPSULA":
-                descricao += f"💣 **{produto['produto']}:** {produto['quantidade']} itens\n"
+                descricao += f"💣 **CAPSULA:** {produto['quantidade']} itens\n"
             elif produto["produto"] == "POLVORA":
-                descricao += f"💥 **{produto['produto']}:** {produto['quantidade']} itens\n"
+                descricao += f"💥 **POLVORA:** {produto['quantidade']} itens\n"
         
-        embed.description = descricao
+        embed.description += descricao
         embed.add_field(name="Data", value=datetime.now().strftime("%d/%m/%Y às %H:%M"), inline=False)
         embed.add_field(name="Total de farms", value=f"{len(dados['usuarios'][str(self.user_id)]['farms'])} farms", inline=False)
         embed.set_image(url=imagem_url)
         
         await self.canal.send(embed=embed)
         
-        # Enviar também para o canal de logs de registros
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros and isinstance(canal_registros, discord.TextChannel):
             await canal_registros.send(embed=embed)
         
-        # Aguarda 10 segundos e depois apaga a print
         await asyncio.sleep(10)
         await msg.delete()
         
@@ -646,7 +639,6 @@ class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
         produtos_str = ", ".join([f"{p['produto']}: {p['quantidade']}" for p in produtos_registrados])
         await log_acao("registrar_farm", interaction.user, f"Produtos: {produtos_str}")
         await log_admin("NOVA FARM PRODUTOS", f"Usuário: {interaction.user.mention}\nProdutos: {produtos_str}", 0x00ff00)
-        
         await atualizar_ranking()
 
 # ========= MODAL DE PAGAMENTO COM PRINT =========
@@ -677,7 +669,6 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
             await interaction.followup.send("Valor inválido!", ephemeral=True)
             return
         
-        # Pede a print do comprovante
         await interaction.followup.send("📸 Agora envie a **print do comprovante de pagamento** aqui no canal.", ephemeral=True)
         
         def check(m):
@@ -721,27 +712,23 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         
         embed = discord.Embed(
             title="PAGAMENTO REGISTRADO",
-            description=f"**Usuário:** {self.user_name}\n**Valor:** R$ {valor:,.2f}\n**Admin:** {interaction.user.mention}",
+            description=f"**Usuário:** <@{self.user_id}>\n**Valor:** R$ {valor:,.2f}\n**Admin:** {interaction.user.mention}",
             color=discord.Color.green(),
             timestamp=datetime.now()
         )
         embed.set_image(url=imagem_url)
         await self.canal.send(embed=embed)
         
-        # Enviar também para o canal de logs de registros
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros and isinstance(canal_registros, discord.TextChannel):
             await canal_registros.send(embed=embed)
         
-        # Aguarda 10 segundos e depois apaga a print
         await asyncio.sleep(10)
         await msg.delete()
         
         await interaction.followup.send(f"Pagamento de R$ {valor:,.2f} registrado para {self.user_name}!", ephemeral=True)
-        
         await log_acao("pagar", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xffa500)
         await log_admin("PAGAMENTO", f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}\nAdmin: {interaction.user.mention}", 0xffa500)
-        
         await atualizar_ranking()
 
 # ========= MODAL PARA FECHAMENTO DE CAIXA =========
@@ -1284,6 +1271,7 @@ class ConfirmarFechamentoView(View):
         await interaction.response.send_message("Cancelado!", ephemeral=True)
 
 # ========= MODAIS ADMIN PARA PAINEL =========
+# (Mantidos para eventual uso, mas o painel não será criado)
 class RemoverUsuarioModal(Modal, title="Remover Usuário do Sistema"):
     user_id = TextInput(
         label="ID do usuário",

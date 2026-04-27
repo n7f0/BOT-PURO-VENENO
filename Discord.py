@@ -63,6 +63,7 @@ async def log_acao(acao, usuario, detalhes, cor=None):
         "pagar": 0xffa500,
         "fechar_canal": 0xff0000,
         "fechar_caixa": 0xffa500,
+        "reset_rank": 0xff0000,
         "erro": 0xff0000,
         "info": 0x3498db,
         "admin": 0x9b59b6,
@@ -132,7 +133,45 @@ def is_admin(member) -> bool:
     
     return False
 
-# ========= FUNÇÃO PARA ATUALIZAR RANKING =========
+# ========= FUNÇÕES PARA RANKING =========
+async def resetar_ranking(interaction: discord.Interaction = None):
+    """Reseta todo o ranking (apenas admin)"""
+    if interaction and not is_admin(interaction.user):
+        await interaction.response.send_message("Apenas administradores podem resetar o ranking!", ephemeral=True)
+        return False
+    
+    # Salvar backup antes de resetar
+    backup = {
+        "usuarios": dados["usuarios"].copy(),
+        "data_backup": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "admin": interaction.user.name if interaction else "Sistema"
+    }
+    
+    # Salvar backup em arquivo
+    with open(f"backup_rank_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", "w", encoding="utf-8") as f:
+        json.dump(backup, f, ensure_ascii=False, indent=2)
+    
+    # Resetar dados do ranking (manter admins e configurações)
+    dados["usuarios"] = {}
+    dados["caixa_semana"] = {}
+    salvar_dados()
+    
+    # Registrar log
+    await log_acao(
+        "reset_rank",
+        interaction.user if interaction else None,
+        f"Ranking foi resetado por {interaction.user.mention if interaction else 'Sistema'}\nBackup salvo.",
+        0xff0000
+    )
+    
+    await log_admin(
+        "RANKING RESETADO",
+        f"**Admin:** {interaction.user.mention if interaction else 'Sistema'}\n**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}\n**Backup salvo**",
+        0xff0000
+    )
+    
+    return True
+
 async def atualizar_ranking():
     """Atualiza o canal de ranking com todas as categorias"""
     canal_rank = bot.get_channel(CHAT_RANK_ID)
@@ -194,7 +233,7 @@ async def atualizar_ranking():
         ranking_text += f"{medalha} **{u['nome']}** - R$ {u['total_pagamentos']:,}\n"
     embed.add_field(name="TOP MONEY", value=ranking_text if ranking_text else "Nenhum dado ainda", inline=False)
     
-    embed.set_footer(text="Atualize o ranking com o botão abaixo")
+    embed.set_footer(text="Use os botões abaixo para gerenciar o ranking")
     
     view = RankingView()
     await canal_rank.send(embed=embed, view=view)
@@ -208,6 +247,53 @@ class RankingView(View):
         await interaction.response.defer()
         await atualizar_ranking()
         await interaction.followup.send("Ranking atualizado!", ephemeral=True)
+    
+    @discord.ui.button(label="Resetar Ranking", style=discord.ButtonStyle.danger, emoji="⚠️")
+    async def resetar(self, interaction: discord.Interaction, button: Button):
+        # Verificar se é admin
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas administradores podem resetar o ranking!", ephemeral=True)
+            return
+        
+        # Criar view de confirmação
+        view = ConfirmarResetView()
+        await interaction.response.send_message(
+            "⚠️ **ATENÇÃO!** ⚠️\n\n"
+            "Você tem certeza que deseja RESETAR TODO O RANKING?\n\n"
+            "Isso irá:\n"
+            "• Apagar todas as farms registradas\n"
+            "• Apagar todos os pagamentos\n"
+            "• Apagar todo o histórico de caixa\n\n"
+            "**Um backup será salvo automaticamente antes do reset.**\n\n"
+            "Esta ação é IRREVERSÍVEL!",
+            view=view,
+            ephemeral=True
+        )
+
+class ConfirmarResetView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+    
+    @discord.ui.button(label="Sim, resetar ranking", style=discord.ButtonStyle.danger, emoji="⚠️")
+    async def confirmar(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        # Resetar ranking
+        sucesso = await resetar_ranking(interaction)
+        
+        if sucesso:
+            await interaction.followup.send("✅ Ranking resetado com sucesso! Um backup foi salvo.", ephemeral=True)
+            # Atualizar o ranking para mostrar vazio
+            await atualizar_ranking()
+        else:
+            await interaction.followup.send("❌ Erro ao resetar ranking.", ephemeral=True)
+        
+        self.stop()
+    
+    @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancelar(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("Reset cancelado.", ephemeral=True)
+        self.stop()
 
 # ========= MODAL PARA REGISTRAR MÚLTIPLOS PRODUTOS =========
 class FarmModal(Modal, title="Registrar Nova Farm"):
@@ -1313,6 +1399,26 @@ async def atualizar_rank_comando(ctx):
     await atualizar_ranking()
     await ctx.send("Ranking atualizado!")
 
+@bot.command(name="resetar_rank")
+async def resetar_rank_comando(ctx):
+    """Reseta o ranking (apenas admin)"""
+    if not is_admin(ctx.author):
+        await ctx.send("Apenas administradores!")
+        return
+    
+    view = ConfirmarResetView()
+    await ctx.send(
+        "⚠️ **ATENÇÃO!** ⚠️\n\n"
+        "Você tem certeza que deseja RESETAR TODO O RANKING?\n\n"
+        "Isso irá:\n"
+        "• Apagar todas as farms registradas\n"
+        "• Apagar todos os pagamentos\n"
+        "• Apagar todo o histórico de caixa\n\n"
+        "**Um backup será salvo automaticamente antes do reset.**\n\n"
+        "Esta ação é IRREVERSÍVEL!",
+        view=view
+    )
+
 # ========= EVENTOS =========
 @bot.event
 async def on_ready():
@@ -1409,10 +1515,10 @@ async def on_ready():
     await atualizar_ranking()
     
     # Enviar mensagem de boas vindas nos canais de log
-    await log_admin("BOT INICIADO", f"Bot {bot.user.mention} está online!\nComandos: !admin, !atualizar_rank", 0x00ff00)
+    await log_admin("BOT INICIADO", f"Bot {bot.user.mention} está online!\nComandos: !admin, !atualizar_rank, !resetar_rank", 0x00ff00)
     
     print(f"\nBOT PRONTO!")
-    print(f"Comandos: !admin, !atualizar_rank")
+    print(f"Comandos: !admin, !atualizar_rank, !resetar_rank")
 
 # ========= INICIAR =========
 if __name__ == "__main__":

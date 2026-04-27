@@ -12,14 +12,9 @@ import aiohttp
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    print("❌ ERRO: Token do Discord não encontrado!")
+    print("ERRO: Token do Discord não encontrado!")
     print("Configure a variável de ambiente DISCORD_TOKEN no Railway")
     sys.exit(1)
-
-# ========= WEBHOOKS =========
-WEBHOOK_LOGS = os.getenv("WEBHOOK_LOGS", "")
-WEBHOOK_ADMIN = os.getenv("WEBHOOK_ADMIN", "")
-WEBHOOK_ABRIR_FARM = os.getenv("WEBHOOK_ABRIR_FARM", "")
 
 # ========= ID DOS CANAIS E CATEGORIAS =========
 CARGO_ADMIN_ID = int(os.getenv("CARGO_ADMIN_ID", "1498104494226014319"))
@@ -59,34 +54,9 @@ def carregar_dados():
         print("Novo banco de dados")
         return False
 
-# ========= FUNÇÕES PARA ENVIAR WEBHOOKS =========
-async def enviar_webhook(webhook_url, titulo, descricao, cor, campos=None, autor_nome=None, autor_icone=None):
-    if not webhook_url:
-        return
-    try:
-        embed = discord.Embed(
-            title=titulo,
-            description=descricao,
-            color=cor,
-            timestamp=datetime.now()
-        )
-        
-        if autor_nome:
-            embed.set_author(name=autor_nome, icon_url=autor_icone)
-        
-        if campos:
-            for nome, valor, inline in campos:
-                embed.add_field(name=nome, value=valor, inline=inline)
-        
-        embed.set_footer(text=f"Sistema de Farm • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-        
-        async with aiohttp.ClientSession() as session:
-            webhook = discord.Webhook.from_url(webhook_url, session=session)
-            await webhook.send(embed=embed)
-    except Exception as e:
-        print(f"Erro ao enviar webhook: {e}")
-
+# ========= FUNÇÕES PARA ENVIAR LOGS =========
 async def log_acao(acao, usuario, detalhes, cor=None):
+    """Envia log para o canal de logs"""
     cores = {
         "criar_canal": 0x00ff00,
         "registrar_farm": 0x00ff00,
@@ -102,17 +72,23 @@ async def log_acao(acao, usuario, detalhes, cor=None):
     
     cor_final = cores.get(acao, 0x3498db) if cor is None else cor
     
-    await enviar_webhook(
-        WEBHOOK_LOGS,
-        f"LOG: {acao.upper()}",
-        detalhes,
-        cor_final,
-        autor_nome=usuario.name if usuario else "Sistema",
-        autor_icone=usuario.display_avatar.url if usuario else None
-    )
+    canal_logs = bot.get_channel(CHAT_LOGS_ID)
+    if canal_logs and isinstance(canal_logs, discord.TextChannel):
+        embed = discord.Embed(
+            title=f"LOG: {acao.upper()}",
+            description=detalhes,
+            color=cor_final,
+            timestamp=datetime.now()
+        )
+        if usuario:
+            embed.set_author(name=usuario.name, icon_url=usuario.display_avatar.url)
+        else:
+            embed.set_author(name="Sistema")
+        embed.set_footer(text=f"Sistema de Farm • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        await canal_logs.send(embed=embed)
 
 async def log_admin(titulo, descricao, cor=0xffa500):
-    """Envia log para o canal de admin logs do Discord"""
+    """Envia log para o canal de admin logs"""
     canal_admin = bot.get_channel(CHAT_ADMIN_LOGS_ID)
     if canal_admin and isinstance(canal_admin, discord.TextChannel):
         embed = discord.Embed(
@@ -121,6 +97,19 @@ async def log_admin(titulo, descricao, cor=0xffa500):
             color=cor,
             timestamp=datetime.now()
         )
+        await canal_admin.send(embed=embed)
+
+async def log_criar_canal(usuario, canal):
+    """Log específico para criação de canal"""
+    canal_admin = bot.get_channel(CHAT_ADMIN_LOGS_ID)
+    if canal_admin and isinstance(canal_admin, discord.TextChannel):
+        embed = discord.Embed(
+            title="NOVO CANAL PRIVADO",
+            description=f"**Usuário:** {usuario.mention}\n**Canal:** {canal.mention}\n**ID:** {canal.id}",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        embed.set_author(name=usuario.name, icon_url=usuario.display_avatar.url)
         await canal_admin.send(embed=embed)
 
 # ========= BOT PRINCIPAL =========
@@ -769,14 +758,13 @@ class FarmChannelView(View):
         if not farms:
             msg = "Você ainda não registrou nenhuma farm."
         else:
-            emojis = {"CHUMBO": "🔫", "CAPSULA": "💣", "POLVORA": "💥"}
             msg = f"**SEUS ÚLTIMOS REGISTROS - {self.user_name}**\n\n"
             for i, f in enumerate(reversed(farms), 1):
-                emoji = emojis.get(f.get('produto', ''), "")
                 msg += f"Farm #{i}\n"
-                if emoji:
-                    msg += f"{emoji} "
-                msg += f"{f.get('produto', 'Desconhecido')}\n{f['quantidade']} itens\n{f['data']}\n[Print]({f['print_url']})\n\n"
+                msg += f"{f.get('produto', 'Desconhecido')}\n"
+                msg += f"{f['quantidade']} itens\n"
+                msg += f"{f['data']}\n"
+                msg += f"[Print]({f['print_url']})\n\n"
         
         if len(msg) > 1900:
             with open(f"historico_{self.user_id}.txt", "w", encoding="utf-8") as f:
@@ -976,6 +964,7 @@ class AdicionarAdminModal(Modal, title="Adicionar Administrador"):
         await interaction.followup.send(f"{usuario_alvo.mention} agora é administrador!", ephemeral=True)
         
         await log_acao("setar_admin", interaction.user, f"Novo admin: {usuario_alvo.mention}", 0x9b59b6)
+        await log_admin("NOVO ADMIN", f"**Adicionado por:** {interaction.user.mention}\n**Novo admin:** {usuario_alvo.mention}", 0x9b59b6)
 
 class RemoverAdminModal(Modal, title="Remover Administrador"):
     identificador = TextInput(
@@ -1021,6 +1010,7 @@ class RemoverAdminModal(Modal, title="Remover Administrador"):
         await interaction.followup.send(f"{usuario_alvo.mention} não é mais administrador!", ephemeral=True)
         
         await log_acao("setar_admin", interaction.user, f"Admin removido: {usuario_alvo.mention}", 0xff0000)
+        await log_admin("ADMIN REMOVIDO", f"**Removido por:** {interaction.user.mention}\n**Ex-admin:** {usuario_alvo.mention}", 0xff0000)
 
 class PagamentoModal(Modal, title="Pagamento Manual"):
     user_id_text = TextInput(label="ID do usuário", placeholder="Digite o ID", required=True)
@@ -1059,6 +1049,7 @@ class PagamentoModal(Modal, title="Pagamento Manual"):
         await interaction.response.send_message(f"Pago R$ {valor_pag:,.2f} para <@{user_id}>!", ephemeral=True)
         
         await log_acao("pagar", interaction.user, f"Valor: R${valor_pag}\nDestinatário: <@{user_id}>", 0xffa500)
+        await log_admin("PAGAMENTO MANUAL", f"**Admin:** {interaction.user.mention}\n**Valor:** R$ {valor_pag:,.2f}\n**Destinatário:** <@{user_id}>", 0xffa500)
         
         await atualizar_ranking()
 
@@ -1273,6 +1264,8 @@ class BotaoCriarCanalView(View):
                 0x00ff00
             )
             
+            await log_criar_canal(interaction.user, canal)
+            
             await interaction.edit_original_response(
                 content=f"Canal privado criado!\n\nAcesse: {canal.mention}"
             )
@@ -1325,6 +1318,19 @@ async def atualizar_rank_comando(ctx):
 async def on_ready():
     print(f"Bot {bot.user} está online!")
     print(f"Conectado a {len(bot.guilds)} servidores")
+    
+    # Verificar canais de log
+    canal_logs = bot.get_channel(CHAT_LOGS_ID)
+    if canal_logs:
+        print(f"Canal de logs encontrado: #{canal_logs.name}")
+    else:
+        print(f"Canal de logs ID {CHAT_LOGS_ID} NÃO ENCONTRADO!")
+    
+    canal_admin_logs = bot.get_channel(CHAT_ADMIN_LOGS_ID)
+    if canal_admin_logs:
+        print(f"Canal de admin logs encontrado: #{canal_admin_logs.name}")
+    else:
+        print(f"Canal de admin logs ID {CHAT_ADMIN_LOGS_ID} NÃO ENCONTRADO!")
     
     for guild in bot.guilds:
         print(f"\nServidor: {guild.name}")
@@ -1401,6 +1407,10 @@ async def on_ready():
             print(f"  Categoria FARMS PRIVADAS ID {CATEGORIA_FARMS_ID} NÃO ENCONTRADA!")
     
     await atualizar_ranking()
+    
+    # Enviar mensagem de boas vindas nos canais de log
+    await log_admin("BOT INICIADO", f"Bot {bot.user.mention} está online!\nComandos: !admin, !atualizar_rank", 0x00ff00)
+    
     print(f"\nBOT PRONTO!")
     print(f"Comandos: !admin, !atualizar_rank")
 

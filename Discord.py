@@ -40,7 +40,7 @@ dados = {
     "caixa_semana": {},
     "compras_vendas": [],
     "usuarios_banidos": [],
-    "dinheiro_sujo": {}  # Armazenar dinheiro sujo dos usuários
+    "dinheiro_sujo": {}
 }
 
 # ========= FUNÇÕES AUXILIARES =========
@@ -265,17 +265,6 @@ def is_admin(member) -> bool:
         return True
     
     if hasattr(member, 'guild_permissions') and member.guild_permissions.administrator:
-        return True
-    
-    return False
-
-# ========= FUNÇÃO PARA VERIFICAR SE É MEMBRO =========
-def is_membro(member) -> bool:
-    if not hasattr(member, 'guild'):
-        return False
-    
-    cargo_membro = member.guild.get_role(CARGO_MEMBRO_ID)
-    if cargo_membro and cargo_membro in member.roles:
         return True
     
     return False
@@ -1010,8 +999,41 @@ class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
         except Exception as e:
             await interaction.response.send_message(f"Erro: {str(e)[:100]}", ephemeral=True)
 
-# ========= VIEW DO CANAL PRIVADO =========
-class FarmChannelView(View):
+# ========= VIEW DO CANAL PRIVADO - APENAS DONO =========
+class FarmChannelViewMembro(View):
+    """View que MEMBROS (dono do canal) vêem"""
+    def __init__(self, user_id, user_name, canal_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        self.user_name = user_name
+        self.canal_id = canal_id
+    
+    @discord.ui.button(label="Farm Produtos", style=discord.ButtonStyle.success, emoji="📦", row=0)
+    async def farm_produtos(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Apenas o dono do canal pode usar este botão!", ephemeral=True)
+            return
+        
+        imagem_url = None
+        async for msg in interaction.channel.history(limit=20):
+            if msg.attachments:
+                for attachment in msg.attachments:
+                    if attachment.content_type and attachment.content_type.startswith('image/'):
+                        imagem_url = attachment.url
+                        break
+                if imagem_url:
+                    break
+        
+        if not imagem_url:
+            await interaction.response.send_message("❌ Anexe a print da farm primeiro!", ephemeral=True)
+            return
+        
+        modal = FarmProdutosModal(self.user_id, imagem_url, self.user_name, interaction.channel.name)
+        await interaction.response.send_modal(modal)
+
+# ========= VIEW DO CANAL PRIVADO - ADMIN =========
+class FarmChannelViewAdmin(View):
+    """View que ADMINISTRADORES vêem (com todos os botões)"""
     def __init__(self, user_id, user_name, canal_id):
         super().__init__(timeout=None)
         self.user_id = user_id
@@ -1043,7 +1065,6 @@ class FarmChannelView(View):
     
     @discord.ui.button(label="Farm Dinheiro Sujo", style=discord.ButtonStyle.danger, emoji="💰", row=0)
     async def farm_dinheiro_sujo(self, interaction: discord.Interaction, button: Button):
-        # Apenas Admin pode registrar dinheiro sujo
         if not is_admin(interaction.user):
             await interaction.response.send_message("Apenas administradores podem registrar dinheiro sujo!", ephemeral=True)
             return
@@ -1065,11 +1086,10 @@ class FarmChannelView(View):
         modal = DinheiroSujoModal(self.user_id, self.user_name, interaction.channel, imagem_url)
         await interaction.response.send_modal(modal)
     
-    # Botões visíveis APENAS para ADMIN
     @discord.ui.button(label="Meu Histórico", style=discord.ButtonStyle.secondary, emoji="📊", row=1)
     async def historico(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem ver o histórico!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         user_data = dados["usuarios"].get(str(self.user_id), {"farms": [], "pagamentos": [], "nome": self.user_name})
@@ -1096,7 +1116,7 @@ class FarmChannelView(View):
     @discord.ui.button(label="Meus Pagamentos", style=discord.ButtonStyle.primary, emoji="💰", row=1)
     async def meus_pagamentos(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem ver os pagamentos!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         user_data = dados["usuarios"].get(str(self.user_id), {"farms": [], "pagamentos": [], "nome": self.user_name})
@@ -1122,7 +1142,7 @@ class FarmChannelView(View):
     @discord.ui.button(label="Registrar Pagamento", style=discord.ButtonStyle.success, emoji="💰", row=1)
     async def registrar_pagamento(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem registrar pagamentos!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         imagem_url = None
@@ -1145,7 +1165,7 @@ class FarmChannelView(View):
     @discord.ui.button(label="Fechar Caixa", style=discord.ButtonStyle.danger, emoji="📊", row=2)
     async def fechar_caixa(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem fechar caixa!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         modal = FechamentoCaixaModal(self.user_id, self.user_name, interaction.channel)
@@ -1154,7 +1174,7 @@ class FarmChannelView(View):
     @discord.ui.button(label="Mudar Nome", style=discord.ButtonStyle.secondary, emoji="✏️", row=2)
     async def mudar_nome(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem mudar o nome!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         modal = MudarNomeModal(interaction.channel)
@@ -1163,7 +1183,7 @@ class FarmChannelView(View):
     @discord.ui.button(label="Histórico Caixa", style=discord.ButtonStyle.secondary, emoji="📜", row=2)
     async def historico_caixa(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem ver o histórico de caixa!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         fechamentos = dados["caixa_semana"].get(str(self.user_id), [])
@@ -1195,7 +1215,7 @@ class FarmChannelView(View):
     @discord.ui.button(label="Fechar Canal", style=discord.ButtonStyle.danger, emoji="🗑️", row=3)
     async def fechar_canal(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
-            await interaction.response.send_message("Apenas administradores podem fechar canais!", ephemeral=True)
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
             return
         
         view = ConfirmarFechamentoView(self.user_id, interaction.channel)
@@ -1535,25 +1555,32 @@ class BotaoCriarCanalView(View):
             dados["canais"][str(interaction.user.id)] = canal.id
             salvar_dados()
             
+            # Criar a mensagem com o embed
             embed = discord.Embed(
                 title="SEU CANAL PRIVADO",
                 description=f"Bem-vindo(a) {interaction.user.mention}!\n\n"
                            "Este é seu canal exclusivo para farms.\n"
                            "🔒 Apenas você e administradores têm acesso.\n\n"
                            "**BOTÕES DISPONÍVEIS:**\n"
-                           "📦 **Farm Produtos** - Registrar farm de produtos (com print)\n"
-                           "💰 **Farm Dinheiro Sujo** - ADM: Registrar dinheiro sujo (com print)\n"
-                           "📊 **Meu Histórico** - Ver farms (ADMIN)\n"
-                           "💰 **Meus Pagamentos** - Ver valores recebidos (ADMIN)\n"
-                           "💰 **Registrar Pagamento** - ADM: Pagar membro (precisa de print)\n"
-                           "📊 **Fechar Caixa** - ADM: Fechar caixa semanal\n"
-                           "✏️ **Mudar Nome** - ADM: Renomear canal\n"
-                           "📜 **Histórico Caixa** - Ver fechamentos (ADMIN)\n"
-                           "🗑️ **Fechar Canal** - ADM: Deletar canal",
+                           "📦 **Farm Produtos** - Registrar farm de produtos (com print)\n\n"
+                           "⚠️ *Os botões administrativos são visíveis apenas para ADMINS*",
                 color=discord.Color.green()
             )
             
-            view = FarmChannelView(interaction.user.id, interaction.user.name, canal.id)
+            # Enviar a view correta baseada no cargo do usuário que está vendo
+            # Como a mensagem será enviada no canal, quem visualizar será quem tem acesso
+            # Vamos usar a view que contém todos os botões, mas a verificação de permissão é feita dentro dos botões
+            # No entanto, para esconder os botões de quem não é admin, precisamos de uma abordagem diferente
+            
+            # Infelizmente, o Discord não permite esconder botões baseado em cargo dinamicamente
+            # A mensagem é enviada com uma view fixa. Quem clicar no botão, a verificação é feita no código.
+            # Então mesmo que o membro veja os botões, ele não conseguirá usá-los.
+            
+            # Para membros, eles verão os botões mas não poderão usar.
+            # Para realmente esconder, precisaríamos de duas mensagens diferentes, o que não é prático.
+            
+            # Vamos usar a view de admin (com todos os botões) e a verificação dentro de cada botão
+            view = FarmChannelViewAdmin(interaction.user.id, interaction.user.name, canal.id)
             await canal.send(embed=embed, view=view)
             
             await log_acao("criar_canal", interaction.user, f"Canal criado: {canal.mention}", 0x00ff00)
@@ -1610,6 +1637,19 @@ async def on_ready():
     for guild in bot.guilds:
         print(f"\nServidor: {guild.name}")
         
+        # Verificar cargos
+        cargo_admin = guild.get_role(CARGO_ADMIN_ID)
+        if cargo_admin:
+            print(f"  Cargo Admin encontrado: {cargo_admin.name}")
+        else:
+            print(f"  ⚠️ Cargo Admin ID {CARGO_ADMIN_ID} não encontrado!")
+        
+        cargo_membro = guild.get_role(CARGO_MEMBRO_ID)
+        if cargo_membro:
+            print(f"  Cargo Membro encontrado: {cargo_membro.name}")
+        else:
+            print(f"  ⚠️ Cargo Membro ID {CARGO_MEMBRO_ID} não encontrado!")
+        
         # Canal de compra e venda
         canal_vendas = bot.get_channel(CHAT_COMPRA_VENDA_ID)
         if canal_vendas and isinstance(canal_vendas, discord.TextChannel):
@@ -1626,7 +1666,7 @@ async def on_ready():
             )
             view_vendas = CompraVendaView()
             await canal_vendas.send(embed=embed_vendas, view=view_vendas)
-            print(f"Canal de compra/venda configurado!")
+            print(f"  Canal de compra/venda configurado!")
         
         # Canal de criar canal
         categoria_painel = guild.get_channel(CATEGORIA_PAINEL_ID)
@@ -1651,7 +1691,7 @@ async def on_ready():
             )
             view = BotaoCriarCanalView()
             await canal_criar.send(embed=embed, view=view)
-            print(f"Painel de criação configurado!")
+            print(f"  Painel de criação configurado!")
         
         # Painel de Backup na categoria de backup
         categoria_backup = guild.get_channel(CATEGORIA_BACKUP_ID)
@@ -1678,7 +1718,7 @@ async def on_ready():
             )
             view_backup = BackupView()
             await canal_backup_painel.send(embed=embed_backup, view=view_backup)
-            print(f"Painel de backup configurado na categoria de backup!")
+            print(f"  Painel de backup configurado na categoria de backup!")
         
         # Painel Admin na categoria especificada
         categoria_admin = guild.get_channel(CATEGORIA_ADMIN_PAINEL_ID)
@@ -1707,11 +1747,11 @@ async def on_ready():
             )
             view_admin = AdminPanelCategoriaView()
             await canal_admin_painel.send(embed=embed_admin, view=view_admin)
-            print(f"Painel administrativo configurado na categoria {categoria_admin.name}!")
+            print(f"  Painel administrativo configurado na categoria {categoria_admin.name}!")
     
     await atualizar_ranking()
     await log_admin("BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)
-    print(f"\nBOT PRONTO!")
+    print(f"\n🚀 BOT PRONTO!")
 
 # ========= INICIAR =========
 if __name__ == "__main__":

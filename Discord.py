@@ -25,7 +25,6 @@ CATEGORIA_PAINEL_ID = int(os.getenv("CATEGORIA_PAINEL_ID", "1498111045489790987"
 CATEGORIA_BACKUP_ID = int(os.getenv("CATEGORIA_BACKUP_ID", "1498305209175380080"))
 CATEGORIA_COMPRA_VENDA_LOGS_ID = int(os.getenv("CATEGORIA_COMPRA_VENDA_LOGS_ID", "1498305956235448390"))
 CATEGORIA_ADMIN_PAINEL_ID = int(os.getenv("CATEGORIA_ADMIN_PAINEL_ID", "1498318907792953374"))
-CHAT_ADMIN_PAINEL_ID = int(os.getenv("CHAT_ADMIN_PAINEL_ID", "1498334105908150332"))
 CHAT_LOGS_ID = int(os.getenv("CHAT_LOGS_ID", "1498109309622550638"))
 CHAT_ADMIN_LOGS_ID = int(os.getenv("CHAT_ADMIN_LOGS_ID", "1498109569853816963"))
 CHAT_RANK_ID = int(os.getenv("CHAT_RANK_ID", "1498109956421976124"))
@@ -126,7 +125,6 @@ async def limpar_logs_usuario(user_id, user_name):
     dados["usuarios_banidos"].append(str(user_id))
     total_limpo = 0
     
-    # Canais para verificar
     canais_para_verificar = [
         CHAT_LOGS_ID,
         CHAT_ADMIN_LOGS_ID,
@@ -134,7 +132,6 @@ async def limpar_logs_usuario(user_id, user_name):
         CHAT_COMPRA_VENDA_ID
     ]
     
-    # Verificar logs nos canais principais
     for canal_id in canais_para_verificar:
         canal = bot.get_channel(canal_id)
         if canal and isinstance(canal, discord.TextChannel):
@@ -152,7 +149,6 @@ async def limpar_logs_usuario(user_id, user_name):
             except:
                 pass
     
-    # Verificar canais privados de farms
     for canal_id in dados["canais"].values():
         canal = bot.get_channel(canal_id)
         if canal and isinstance(canal, discord.TextChannel):
@@ -170,7 +166,6 @@ async def limpar_logs_usuario(user_id, user_name):
             except:
                 pass
     
-    # Remover usuário do ranking (zerar dados)
     if str(user_id) in dados["usuarios"]:
         dados["usuarios"][str(user_id)] = {
             "farms": [],
@@ -182,7 +177,6 @@ async def limpar_logs_usuario(user_id, user_name):
         }
         salvar_dados()
     
-    # Se o usuário tinha um canal privado, fechar
     if str(user_id) in dados["canais"]:
         canal_id = dados["canais"][str(user_id)]
         canal = bot.get_channel(canal_id)
@@ -196,39 +190,26 @@ async def limpar_logs_usuario(user_id, user_name):
     
     return total_limpo
 
-async def limpar_todos_usuarios_removidos():
-    """Limpa todos os usuários que já saíram do servidor"""
-    if not hasattr(bot, 'guild'):
-        return 0
-    
-    total_limpo = 0
-    guild = None
-    
-    for g in bot.guilds:
-        guild = g
-        break
-    
-    if not guild:
-        return 0
-    
-    # Lista de usuários atualmente no servidor
-    membros_ids = [str(member.id) for member in guild.members]
-    
-    # IDs de usuários que estão nos dados mas não estão mais no servidor
-    usuarios_remover = []
-    for user_id in dados["usuarios"].keys():
-        if user_id not in membros_ids and "removido_em" not in dados["usuarios"][user_id]:
-            usuarios_remover.append(user_id)
-    
-    for user_id in usuarios_remover:
-        try:
-            user = await bot.fetch_user(int(user_id))
-            total_limpo += await limpar_logs_usuario(user_id, user.name)
-        except:
-            # Se não conseguir buscar o usuário, usar ID como nome
-            total_limpo += await limpar_logs_usuario(user_id, f"Usuário_{user_id}")
-    
-    return total_limpo
+async def apagar_mensagens_antigas(canal, quantidade=10):
+    """Apaga as últimas mensagens do bot no canal"""
+    try:
+        async for msg in canal.history(limit=quantidade):
+            if msg.author == bot.user:
+                await msg.delete()
+    except:
+        pass
+
+async def limpar_todas_prints_do_canal(canal):
+    """Apaga todas as mensagens com prints do canal"""
+    try:
+        async for msg in canal.history(limit=50):
+            if msg.attachments:
+                for attachment in msg.attachments:
+                    if attachment.content_type and attachment.content_type.startswith('image/'):
+                        await msg.delete()
+                        break
+    except:
+        pass
 
 # ========= FUNÇÕES PARA ENVIAR LOGS =========
 async def log_acao(acao, usuario, detalhes, cor=None):
@@ -524,6 +505,9 @@ class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
         embed.set_image(url=self.imagem_url)
         await self.canal.send(embed=embed)
         
+        # Apagar a print usada
+        await limpar_todas_prints_do_canal(self.canal)
+        
         await interaction.followup.send(f"R$ {valor:,.2f} registrado como dinheiro sujo para {self.user_name}!", ephemeral=True)
         
         await log_acao("registrar_dinheiro_sujo", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xff0000)
@@ -626,6 +610,9 @@ class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
         
+        # Apagar a print usada
+        await limpar_todas_prints_do_canal(self.canal_nome if hasattr(self, 'canal') else interaction.channel)
+        
         produtos_str = ", ".join([f"{p['produto']}: {p['quantidade']}" for p in produtos_registrados])
         await log_acao("registrar_farm", interaction.user, f"Produtos: {produtos_str}")
         await log_admin("NOVA FARM PRODUTOS", f"Usuário: {interaction.user.mention}\nProdutos: {produtos_str}", 0x00ff00)
@@ -696,6 +683,9 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         )
         embed.set_image(url=self.imagem_url)
         await self.canal.send(embed=embed)
+        
+        # Apagar a print usada
+        await limpar_todas_prints_do_canal(self.canal)
         
         await interaction.followup.send(f"Pagamento de R$ {valor:,.2f} registrado para {self.user_name}!", ephemeral=True)
         
@@ -1866,35 +1856,46 @@ async def on_ready():
         else:
             print(f"  ⚠️ Categoria de backup ID {CATEGORIA_BACKUP_ID} não encontrada!")
         
-        # ========= PAINEL ADMIN NO CHAT ESPECÍFICO =========
-        # Usar o canal específico do painel admin
-        canal_admin_painel = bot.get_channel(CHAT_ADMIN_PAINEL_ID)
+        # ========= PAINEL ADMIN - CRIA O CANAL AUTOMATICAMENTE =========
+        categoria_admin = guild.get_channel(CATEGORIA_ADMIN_PAINEL_ID)
         
-        if canal_admin_painel and isinstance(canal_admin_painel, discord.TextChannel):
-            # Verificar se o canal está na categoria correta
-            if canal_admin_painel.category_id == CATEGORIA_ADMIN_PAINEL_ID:
-                # Limpar mensagens antigas do bot
-                async for msg in canal_admin_painel.history(limit=10):
-                    if msg.author == bot.user:
-                        await msg.delete()
-                
-                embed_admin = discord.Embed(
-                    title="👑 PAINEL ADMINISTRATIVO",
-                    description="**BOTÕES DISPONÍVEIS:**\n\n"
-                               "👑 **Adicionar Admin** - Dá cargo de administrador para um usuário\n"
-                               "🗑️ **Remover Admin** - Remove cargo de administrador\n"
-                               "👤❌ **Remover Usuário** - Remove um usuário do sistema e apaga todas as menções\n"
-                               "🧹 **Apagar Logs de Membros** - Remove automaticamente todos os usuários que saíram da facção\n"
-                               "💾 **Gerenciar Backups** - Criar ou apagar backups do sistema",
-                    color=discord.Color.purple()
-                )
-                view_admin = AdminPanelCategoriaView()
-                await canal_admin_painel.send(embed=embed_admin, view=view_admin)
-                print(f"  ✅ Painel administrativo configurado no canal #{canal_admin_painel.name}!")
-            else:
-                print(f"  ⚠️ Canal {canal_admin_painel.name} não está na categoria correta!")
+        if categoria_admin and isinstance(categoria_admin, discord.CategoryChannel):
+            # Verificar se o canal "painel-admin" já existe
+            canal_admin_painel = None
+            for channel in categoria_admin.channels:
+                if channel.name == "painel-admin" and isinstance(channel, discord.TextChannel):
+                    canal_admin_painel = channel
+                    break
+            
+            # Se não existir, criar o canal
+            if not canal_admin_painel:
+                try:
+                    canal_admin_painel = await categoria_admin.create_text_channel("painel-admin")
+                    print(f"  ✅ Canal 'painel-admin' criado na categoria {categoria_admin.name}!")
+                except Exception as e:
+                    print(f"  ❌ Erro ao criar canal 'painel-admin': {e}")
+                    continue
+            
+            # Limpar mensagens antigas do bot
+            async for msg in canal_admin_painel.history(limit=10):
+                if msg.author == bot.user:
+                    await msg.delete()
+            
+            embed_admin = discord.Embed(
+                title="👑 PAINEL ADMINISTRATIVO",
+                description="**BOTÕES DISPONÍVEIS:**\n\n"
+                           "👑 **Adicionar Admin** - Dá cargo de administrador para um usuário\n"
+                           "🗑️ **Remover Admin** - Remove cargo de administrador\n"
+                           "👤❌ **Remover Usuário** - Remove um usuário do sistema e apaga todas as menções\n"
+                           "🧹 **Apagar Logs de Membros** - Remove automaticamente todos os usuários que saíram da facção\n"
+                           "💾 **Gerenciar Backups** - Criar ou apagar backups do sistema",
+                color=discord.Color.purple()
+            )
+            view_admin = AdminPanelCategoriaView()
+            await canal_admin_painel.send(embed=embed_admin, view=view_admin)
+            print(f"  ✅ Painel administrativo configurado no canal #{canal_admin_painel.name}!")
         else:
-            print(f"  ⚠️ Canal de Admin ID {CHAT_ADMIN_PAINEL_ID} não encontrado!")
+            print(f"  ⚠️ Categoria de Admin ID {CATEGORIA_ADMIN_PAINEL_ID} NÃO ENCONTRADA!")
     
     await atualizar_ranking()
     await log_admin("🤖 BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)

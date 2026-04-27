@@ -148,7 +148,7 @@ async def atualizar_ranking():
             tot_polvora = sum(p["quantidade"] for f in data["farms"] for p in f.get("produtos",[]) if p["produto"]=="POLVORA")
             tot_pag = sum(p["valor"] for p in data["pagamentos"])
             qtd_pag = len(data["pagamentos"])
-            din_sujo = data.get("dinheiro_sujo",0)
+            din_sujo = data.get("dinheiro_sujo", 0)  # Total acumulado de dinheiro sujo
             usuarios_data.append({"nome":user.name,"user_id":uid,"total_chumbo":tot_chumbo,"total_capsula":tot_capsula,"total_polvora":tot_polvora,"total_pagamentos":tot_pag,"quantidade_pagamentos":qtd_pag,"dinheiro_sujo":din_sujo})
         except: continue
     emb = discord.Embed(title="RANKING GERAL", description=f"Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", color=discord.Color.gold())
@@ -228,9 +228,10 @@ class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
         await self.canal.send(embed=embed)
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
+        # Print não é apagada
         await interaction.followup.send(f"R$ {valor:,.2f} registrado como dinheiro sujo para {self.user_name}!", ephemeral=True)
         await log_acao("registrar_dinheiro_sujo", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xff0000)
-        await atualizar_ranking()
+        await atualizar_ranking()  # Atualiza o ranking com o novo total
 
 class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
     chumbo = TextInput(label="CHUMBO - Quantidade", placeholder="Ex: 250", required=False)
@@ -299,7 +300,7 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         await log_acao("pagar", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xffa500)
         await atualizar_ranking()
 
-# ========= NOVO FechamentoCaixaModal (cálculo automático) =========
+# ========= FechamentoCaixaModal (cálculo automático) =========
 class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
     meta_farm = TextInput(label="Meta de Farm (Sim/Não)", placeholder="Digite Sim ou Não", required=True)
     bonus = TextInput(label="Bônus (R$) - Opcional", placeholder="Ex: 500 (deixe 0 se não houver)", required=False, default="0")

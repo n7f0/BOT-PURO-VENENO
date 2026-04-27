@@ -60,6 +60,7 @@ def carregar_dados():
         return False
 
 async def criar_canal_backup(tipo, nome_arquivo=None):
+    """Cria canal na categoria de backup"""
     categoria = bot.get_channel(CATEGORIA_BACKUP_ID)
     if not categoria or not isinstance(categoria, discord.CategoryChannel):
         print(f"Categoria de backup {CATEGORIA_BACKUP_ID} não encontrada!")
@@ -97,6 +98,7 @@ async def criar_canal_backup(tipo, nome_arquivo=None):
         return canal
 
 async def criar_canal_compra_venda_log(tipo, dados_log):
+    """Cria canal na categoria de logs de compra/venda"""
     categoria = bot.get_channel(CATEGORIA_COMPRA_VENDA_LOGS_ID)
     if not categoria or not isinstance(categoria, discord.CategoryChannel):
         print(f"Categoria de compra/venda logs {CATEGORIA_COMPRA_VENDA_LOGS_ID} não encontrada!")
@@ -118,28 +120,8 @@ async def criar_canal_compra_venda_log(tipo, dados_log):
     await canal.send(embed=embed)
     return canal
 
-async def registrar_pagamento(user_id, valor, admin, tipo="manual", salario=None, extra=None):
-    if str(user_id) not in dados["usuarios"]:
-        dados["usuarios"][str(user_id)] = {"farms": [], "pagamentos": [], "nome": "Usuário"}
-    
-    pagamento = {
-        "valor": valor,
-        "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "admin": admin.id,
-        "admin_nome": admin.name,
-        "tipo": tipo
-    }
-    
-    if salario is not None:
-        pagamento["salario"] = salario
-    if extra is not None:
-        pagamento["extra"] = extra
-    
-    dados["usuarios"][str(user_id)]["pagamentos"].append(pagamento)
-    salvar_dados()
-    await atualizar_ranking()
-
 async def limpar_logs_usuario(user_id, user_name):
+    """Limpa todas as referências ao usuário nos logs e canais"""
     if str(user_id) in dados["usuarios_banidos"]:
         return
     
@@ -1405,6 +1387,58 @@ class BotaoCriarCanalView(View):
         except Exception as e:
             await interaction.edit_original_response(content=f"Erro: {str(e)[:200]}")
 
+# ========= PAINEL DE BACKUP NA CATEGORIA =========
+class PainelBackupView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="Criar Backup", style=discord.ButtonStyle.success, emoji="💾")
+    async def criar_backup(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Sem permissão!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        backup_nome = f"backup_completo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        backup = {
+            "data_backup": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "admin": interaction.user.name,
+            "dados": dados.copy()
+        }
+        
+        with open(backup_nome, "w", encoding="utf-8") as f:
+            json.dump(backup, f, ensure_ascii=False, indent=2)
+        
+        await criar_canal_backup("novo", backup_nome)
+        await interaction.followup.send("Backup criado com sucesso!", ephemeral=True)
+        await log_admin("BACKUP CRIADO", f"Admin: {interaction.user.mention}\nArquivo: {backup_nome}", 0x00ff00)
+    
+    @discord.ui.button(label="Apagar Backups", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def apagar_backups(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Sem permissão!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        backups_encontrados = []
+        for arquivo in os.listdir('.'):
+            if arquivo.startswith('backup_') and arquivo.endswith('.json'):
+                backups_encontrados.append(arquivo)
+        
+        if not backups_encontrados:
+            await interaction.followup.send("Nenhum backup encontrado!", ephemeral=True)
+            return
+        
+        for backup in backups_encontrados:
+            await criar_canal_backup("deletado", backup)
+            os.remove(backup)
+        
+        await interaction.followup.send(f"{len(backups_encontrados)} backup(s) deletado(s)!", ephemeral=True)
+        await log_admin("BACKUPS DELETADOS", f"Admin: {interaction.user.mention}\nQuantidade: {len(backups_encontrados)}", 0xff0000)
+
 # ========= COMANDOS =========
 @bot.command(name="admin")
 async def admin_panel(ctx):
@@ -1458,6 +1492,7 @@ async def on_ready():
     for guild in bot.guilds:
         print(f"\nServidor: {guild.name}")
         
+        # Canal de compra e venda
         canal_vendas = bot.get_channel(CHAT_COMPRA_VENDA_ID)
         if canal_vendas and isinstance(canal_vendas, discord.TextChannel):
             async for msg in canal_vendas.history(limit=10):
@@ -1475,6 +1510,7 @@ async def on_ready():
             await canal_vendas.send(embed=embed_vendas, view=view_vendas)
             print(f"Canal de compra/venda configurado!")
         
+        # Canal de criar canal
         categoria_painel = guild.get_channel(CATEGORIA_PAINEL_ID)
         if categoria_painel and isinstance(categoria_painel, discord.CategoryChannel):
             canal_criar = None
@@ -1498,6 +1534,33 @@ async def on_ready():
             view = BotaoCriarCanalView()
             await canal_criar.send(embed=embed, view=view)
             print(f"Painel de criação configurado!")
+        
+        # Painel de Backup na categoria de backup
+        categoria_backup = guild.get_channel(CATEGORIA_BACKUP_ID)
+        if categoria_backup and isinstance(categoria_backup, discord.CategoryChannel):
+            canal_backup_painel = None
+            for channel in categoria_backup.channels:
+                if channel.name == "painel-backup" and isinstance(channel, discord.TextChannel):
+                    canal_backup_painel = channel
+                    break
+            
+            if not canal_backup_painel:
+                canal_backup_painel = await categoria_backup.create_text_channel("painel-backup")
+            
+            async for msg in canal_backup_painel.history(limit=5):
+                if msg.author == bot.user:
+                    await msg.delete()
+            
+            embed_backup = discord.Embed(
+                title="💾 PAINEL DE BACKUP",
+                description="**BOTÕES DISPONÍVEIS:**\n\n"
+                           "💾 **Criar Backup** - Salva todos os dados atuais em um novo canal\n"
+                           "🗑️ **Apagar Backups** - Remove todos os backups antigos",
+                color=discord.Color.blue()
+            )
+            view_backup = PainelBackupView()
+            await canal_backup_painel.send(embed=embed_backup, view=view_backup)
+            print(f"Painel de backup configurado na categoria de backup!")
     
     await atualizar_ranking()
     await log_admin("BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)

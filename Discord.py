@@ -228,7 +228,6 @@ class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
         await self.canal.send(embed=embed)
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
-        # Print não é apagada
         await interaction.followup.send(f"R$ {valor:,.2f} registrado como dinheiro sujo para {self.user_name}!", ephemeral=True)
         await log_acao("registrar_dinheiro_sujo", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xff0000)
         await atualizar_ranking()
@@ -268,7 +267,6 @@ class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
         await interaction.followup.send(embed=embed, ephemeral=True)
-        # LINHA 270 CORRIGIDA
         produtos_str = ', '.join(f"{p['produto']}: {p['quantidade']}" for p in produtos)
         await log_acao("registrar_farm", interaction.user, f"Produtos: {produtos_str}")
         await log_admin("NOVA FARM PRODUTOS", f"Usuário: {interaction.user.mention}\nProdutos: {produtos_str}", 0x00ff00)
@@ -297,17 +295,14 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         await self.canal.send(embed=embed)
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
-        # Print não é apagada
         await interaction.followup.send(f"Pagamento de R$ {valor:,.2f} registrado!", ephemeral=True)
         await log_acao("pagar", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xffa500)
         await atualizar_ranking()
 
-# ========= FechamentoCaixaModal (sem campo Farm Sujo, com Observação) =========
+# ========= NOVO FechamentoCaixaModal (cálculo automático) =========
 class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
     meta_farm = TextInput(label="Meta de Farm (Sim/Não)", placeholder="Digite Sim ou Não", required=True)
-    salario = TextInput(label="Salário (R$)", placeholder="Ex: 1000", required=True)
-    extra = TextInput(label="Extra (R$)", placeholder="Ex: 200", required=True)
-    total = TextInput(label="Total (R$)", placeholder="Ex: 4700", required=True)
+    bonus = TextInput(label="Bônus (R$) - Opcional", placeholder="Ex: 500 (deixe 0 se não houver)", required=False, default="0")
     observacao = TextInput(label="Observação (mensagem carinhosa)", placeholder="Deixe uma mensagem para o usuário...", required=False, style=discord.TextStyle.long)
 
     def __init__(self, user_id, user_name, canal):
@@ -326,47 +321,54 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             await interaction.followup.send("Meta de Farm deve ser 'Sim' ou 'Não'!", ephemeral=True); return
         meta = "Sim" if meta=="sim" else "Não"
 
-        try:
-            salario_valor = float(self.salario.value.replace(",","."))
-            extra_valor = float(self.extra.value.replace(",","."))
-            total_valor = float(self.total.value.replace(",","."))
-        except ValueError:
-            await interaction.followup.send("Valores inválidos!", ephemeral=True); return
+        # Processa bônus
+        bonus_str = self.bonus.value.strip()
+        if bonus_str == "":
+            bonus_valor = 0.0
+        else:
+            try: bonus_valor = float(bonus_str.replace(",","."))
+            except ValueError: await interaction.followup.send("Valor de bônus inválido!", ephemeral=True); return
 
-        # Obtém automaticamente o dinheiro sujo acumulado
-        sujo = dados["usuarios"].get(str(self.user_id), {}).get("dinheiro_sujo", 0.0)
+        # Obtém dinheiro sujo acumulado
+        total_sujo = dados["usuarios"].get(str(self.user_id), {}).get("dinheiro_sujo", 0.0)
+        if total_sujo <= 0:
+            await interaction.followup.send("Este usuário não possui dinheiro sujo acumulado para fechar.", ephemeral=True); return
 
-        # Verifica soma
-        if abs((sujo + salario_valor + extra_valor) - total_valor) > 0.01:
-            await interaction.followup.send(
-                f"O total informado (R$ {total_valor:,.2f}) não confere com a soma do Farm Sujo (R$ {sujo:,.2f}) + Salário + Extra. Corrija.",
-                ephemeral=True
-            ); return
+        # Cálculos
+        lavagem = total_sujo * 0.25
+        restante = total_sujo - lavagem
+        faccao = restante * 0.60
+        membro_base = restante * 0.40
+        pagamento_final = membro_base + bonus_valor
 
+        obs = self.observacao.value.strip() if self.observacao.value else None
+
+        # Exige print
         await interaction.followup.send("📸 Agora envie a **print do comprovante** aqui no canal.", ephemeral=True)
         def check(m): return m.author==interaction.user and m.channel==self.canal and m.attachments and any(a.content_type and a.content_type.startswith('image/') for a in m.attachments)
         try: msg = await bot.wait_for('message', timeout=60.0, check=check)
         except asyncio.TimeoutError: await interaction.followup.send("Tempo esgotado!", ephemeral=True); return
         imagem_url = msg.attachments[0].url
 
-        valor_pagamento = salario_valor + extra_valor
-        obs = self.observacao.value.strip() if self.observacao.value else None
-
+        # Garante estrutura do usuário
         if str(self.user_id) not in dados["usuarios"]:
             dados["usuarios"][str(self.user_id)] = {"farms":[],"pagamentos":[],"nome":self.user_name,"dinheiro_sujo":0}
 
+        # Registra o pagamento (somente o que o membro recebe)
         dados["usuarios"][str(self.user_id)]["pagamentos"].append({
-            "valor": valor_pagamento,
+            "valor": pagamento_final,
             "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "admin": interaction.user.id,
             "admin_nome": interaction.user.name,
             "tipo": "Fechamento de Caixa Semanal",
-            "salario": salario_valor,
-            "extra": extra_valor,
-            "farm_sujo": sujo,
-            "meta_farm": meta,
-            "print_url": imagem_url,
-            "observacao": obs
+            "detalhes": {
+                "total_sujo": total_sujo,
+                "lavagem": lavagem,
+                "faccao": faccao,
+                "membro_base": membro_base,
+                "bonus": bonus_valor
+            },
+            "print_url": imagem_url
         })
 
         fechamento = {
@@ -376,11 +378,12 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             "usuario": self.user_name,
             "usuario_id": self.user_id,
             "meta_farm": meta,
-            "farm_sujo": sujo,
-            "salario": salario_valor,
-            "extra": extra_valor,
-            "total": total_valor,
-            "valor_pago": valor_pagamento,
+            "total_sujo": total_sujo,
+            "lavagem": lavagem,
+            "faccao": faccao,
+            "membro_base": membro_base,
+            "bonus": bonus_valor,
+            "pagamento_final": pagamento_final,
             "print_url": imagem_url,
             "observacao": obs
         }
@@ -388,30 +391,38 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
         if str(self.user_id) not in dados["caixa_semana"]:
             dados["caixa_semana"][str(self.user_id)] = []
         dados["caixa_semana"][str(self.user_id)].append(fechamento)
+
+        # Zera o dinheiro sujo após o fechamento
+        dados["usuarios"][str(self.user_id)]["dinheiro_sujo"] = 0
         salvar_dados()
 
         # Notificação ao dono do canal
         try:
             user = await interaction.client.fetch_user(int(self.user_id))
-            notif = discord.Embed(title="FECHAMENTO DE CAIXA", description=f"Registrado para {self.user_name}!", color=discord.Color.orange())
+            notif = discord.Embed(title="FECHAMENTO DE CAIXA", description=f"Olá {self.user_name}, seu caixa foi fechado!", color=discord.Color.orange())
             notif.add_field(name="Meta de Farm", value=meta, inline=False)
-            notif.add_field(name="Farm Sujo", value=f"R$ {sujo:,.2f}", inline=True)
-            notif.add_field(name="Salário", value=f"R$ {salario_valor:,.2f}", inline=True)
-            notif.add_field(name="Extra", value=f"R$ {extra_valor:,.2f}", inline=True)
-            notif.add_field(name="Total", value=f"R$ {total_valor:,.2f}", inline=True)
-            notif.add_field(name="Total Recebido", value=f"R$ {valor_pagamento:,.2f}", inline=True)
+            notif.add_field(name="Total Farmado", value=f"R$ {total_sujo:,.2f}", inline=False)
+            notif.add_field(name="Lavagem (25%)", value=f"R$ {lavagem:,.2f}", inline=True)
+            notif.add_field(name="Facção (60% do restante)", value=f"R$ {faccao:,.2f}", inline=True)
+            notif.add_field(name="Seu Base (40%)", value=f"R$ {membro_base:,.2f}", inline=True)
+            if bonus_valor > 0:
+                notif.add_field(name="Bônus", value=f"R$ {bonus_valor:,.2f}", inline=True)
+            notif.add_field(name="💰 Total Recebido", value=f"R$ {pagamento_final:,.2f}", inline=False)
             if obs: notif.add_field(name="💌 Mensagem", value=obs, inline=False)
             notif.set_image(url=imagem_url)
             await user.send(embed=notif)
         except: pass
 
+        # Embed no canal
         embed = discord.Embed(title="FECHAMENTO DE CAIXA SEMANAL", description=f"**{self.user_name}** fechou o caixa!", color=discord.Color.orange(), timestamp=datetime.now())
         embed.add_field(name="Meta de Farm", value=meta, inline=False)
-        embed.add_field(name="Farm Sujo", value=f"R$ {sujo:,.2f}", inline=True)
-        embed.add_field(name="Salário", value=f"R$ {salario_valor:,.2f}", inline=True)
-        embed.add_field(name="Extra", value=f"R$ {extra_valor:,.2f}", inline=True)
-        embed.add_field(name="TOTAL BRUTO", value=f"R$ {total_valor:,.2f}", inline=True)
-        embed.add_field(name="PAGAMENTO REALIZADO", value=f"R$ {valor_pagamento:,.2f}", inline=True)
+        embed.add_field(name="Total Farmado", value=f"R$ {total_sujo:,.2f}", inline=False)
+        embed.add_field(name="Lavagem (25%)", value=f"R$ {lavagem:,.2f}", inline=True)
+        embed.add_field(name="Facção (60%)", value=f"R$ {faccao:,.2f}", inline=True)
+        embed.add_field(name="Membro Base (40%)", value=f"R$ {membro_base:,.2f}", inline=True)
+        if bonus_valor > 0:
+            embed.add_field(name="Bônus", value=f"R$ {bonus_valor:,.2f}", inline=True)
+        embed.add_field(name="💰 Pagamento Final", value=f"R$ {pagamento_final:,.2f}", inline=False)
         embed.add_field(name="Responsável", value=interaction.user.mention, inline=False)
         if obs: embed.add_field(name="💌 Mensagem", value=obs, inline=False)
         embed.set_image(url=imagem_url)
@@ -420,12 +431,12 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
 
-        await interaction.followup.send(f"Fechamento de caixa registrado! Pagamento de R$ {valor_pagamento:,.2f} realizado.", ephemeral=True)
-        await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nMeta: {meta}\nPagamento: R$ {valor_pagamento}", 0xffa500)
-        await log_admin("FECHAMENTO DE CAIXA", f"Usuário: {self.user_name}\nAdmin: {interaction.user.mention}\nTotal Pago: R$ {valor_pagamento:,.2f}", 0xffa500)
+        await interaction.followup.send(f"Fechamento registrado! {self.user_name} recebe R$ {pagamento_final:,.2f}.", ephemeral=True)
+        await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nMeta: {meta}\nPagamento: R$ {pagamento_final}", 0xffa500)
+        await log_admin("FECHAMENTO DE CAIXA", f"Usuário: {self.user_name}\nAdmin: {interaction.user.mention}\nTotal Pago: R$ {pagamento_final:,.2f}", 0xffa500)
         await atualizar_ranking()
 
-# ========= MODAIS COMPRA/VENDA =========
+# ========= MODAIS COMPRA/VENDA (mantidos) =========
 class VendaModal(Modal, title="Venda de Munição"):
     quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
     valor_total = TextInput(label="Valor Total (R$)", placeholder="Ex: 500", required=True)
@@ -480,7 +491,6 @@ class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
         try: await self.canal.edit(name=nome); await interaction.response.send_message(f"Nome alterado para {nome}", ephemeral=True)
         except Exception as e: await interaction.response.send_message(f"Erro: {str(e)[:100]}", ephemeral=True)
 
-# ========= VIEWS DO CANAL PRIVADO =========
 class FarmChannelViewMembro(View):
     def __init__(self, user_id, user_name, canal_id):
         super().__init__(timeout=None); self.user_id = user_id; self.user_name = user_name; self.canal_id = canal_id
@@ -520,7 +530,9 @@ class FarmChannelViewAdmin(View):
         embed = discord.Embed(title="HISTÓRICO DE CAIXA", description=f"Últimos {min(10, len(fechamentos))} registros", color=discord.Color.blue())
         for fech in fechamentos[-10:]:
             data = datetime.strptime(fech["data"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y")
-            txt = f"Meta: {fech.get('meta_farm','?')}\nFarm Sujo: R$ {fech['farm_sujo']:,.2f}\nSalário: R$ {fech['salario']:,.2f}\nExtra: R$ {fech['extra']:,.2f}\n**Pago: R$ {fech['valor_pago']:,.2f}**"
+            txt = f"Meta: {fech.get('meta_farm','?')}\nTotal Farmado: R$ {fech.get('total_sujo',0):,.2f}\nLavagem: R$ {fech.get('lavagem',0):,.2f}\nFacção: R$ {fech.get('faccao',0):,.2f}\nMembro Base: R$ {fech.get('membro_base',0):,.2f}"
+            if fech.get('bonus',0) > 0: txt += f"\nBônus: R$ {fech['bonus']:,.2f}"
+            txt += f"\n**Pago: R$ {fech.get('pagamento_final',0):,.2f}**"
             if fech.get('observacao'): txt += f"\n💌 {fech['observacao']}"
             embed.add_field(name=f"📅 {data}", value=txt, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -542,7 +554,6 @@ class ConfirmarFechamentoView(View):
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: Button): await interaction.response.send_message("Cancelado!", ephemeral=True)
 
-# ========= MODAIS ADMIN =========
 class RemoverUsuarioModal(Modal, title="Remover Usuário"):
     user_id = TextInput(label="ID do usuário", required=True)
     async def on_submit(self, interaction: discord.Interaction):
@@ -583,7 +594,6 @@ class BackupView(View):
         await interaction.followup.send(f"{len(backups)} backups deletados!", ephemeral=True)
         await log_admin("BACKUPS DELETADOS", f"Admin: {interaction.user.mention}\nQtd: {len(backups)}", 0xff0000)
 
-# ========= BOTÃO CRIAR CANAL =========
 class BotaoCriarCanalView(View):
     def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="Criar Meu Canal Privado", style=discord.ButtonStyle.success, emoji="🔓")
@@ -623,7 +633,6 @@ class BotaoCriarCanalView(View):
             await atualizar_ranking()
         except Exception as e: await interaction.edit_original_response(content=f"Erro: {str(e)[:200]}")
 
-# ========= EVENTOS =========
 @bot.event
 async def on_member_remove(member):
     if str(member.id) in dados["usuarios_banidos"]: return

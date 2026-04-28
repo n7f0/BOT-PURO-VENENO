@@ -1375,4 +1375,4 @@ async def on_ready():
 
 if __name__ == "__main__":
     carregar_dados()
-    bot.run(TOKEN)
+    bot.run(TOKEN) 

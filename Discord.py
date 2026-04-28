@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands, tasks
-from discord.ui import Button, View, Modal, TextInput, Select
+from discord.ui import Button, View, Modal, TextInput
 import asyncio
 from datetime import datetime
 import json
@@ -8,7 +8,6 @@ import os
 import sys
 import aiohttp
 import re
-from urllib.parse import urlparse
 
 # ========= CONFIGURAÇÕES =========
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -43,8 +42,8 @@ dados = {
     "usuarios_banidos": [],
     "dinheiro_sujo": {},
     "lives": {
-        "config": {},      # {server_id: {"channel": id, "role": id, "platforms": {"twitch": bool, "youtube": bool, "kick": bool, "tiktok": bool}}}
-        "streamers": {},   # {server_id: {unique_id: {"nome": ..., "plataformas": {"twitch": "username", ...}}}}
+        "config": {},
+        "streamers": {},
         "last_notified": {}
     }
 }
@@ -62,7 +61,6 @@ def carregar_dados():
     except:
         return False
 
-# ========= FUNÇÕES AUXILIARES (mantidas originais) =========
 async def criar_canal_backup(tipo, nome_arquivo=None):
     categoria = bot.get_channel(CATEGORIA_BACKUP_ID)
     if not categoria: return None
@@ -149,7 +147,6 @@ def is_admin(member) -> bool:
     if member.guild_permissions.administrator: return True
     return False
 
-# ========= RANKING (mantido) =========
 async def atualizar_ranking():
     canal = bot.get_channel(CHAT_RANK_ID)
     if not canal: return
@@ -222,7 +219,6 @@ class ConfirmarResetView(View):
         await interaction.response.send_message("Reset cancelado.", ephemeral=True)
         self.stop()
 
-# ========= MODAIS FARM (mantidos) =========
 class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
     quantidade = TextInput(label="Valor (R$)", placeholder="Ex: 5000", required=True)
     def __init__(self, user_id, user_name, canal):
@@ -413,7 +409,6 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nPagamento: R$ {pagamento_final}", 0xffa500)
         await atualizar_ranking()
 
-# ========= COMPRA/VENDA (mantido) =========
 class VendaModal(Modal, title="Venda de Munição"):
     quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
     valor_total = TextInput(label="Valor Total (R$)", placeholder="Ex: 500", required=True)
@@ -655,7 +650,7 @@ class BotaoCriarCanalView(View):
             await atualizar_ranking()
         except Exception as e: await interaction.edit_original_response(content=f"Erro: {str(e)[:200]}")
 
-# ========= NOVO SISTEMA DE LIVES =========
+# ========= SISTEMA DE LIVES =========
 def extract_platform_from_url(url: str):
     url = url.strip().lower()
     if "twitch.tv" in url:
@@ -767,7 +762,6 @@ async def live_check_loop():
                         if canal:
                             embed = discord.Embed(title="🔴 LIVE NO YOUTUBE", description=f"**{data.get('nome', uid)}** está ao vivo!\n{video['snippet']['title']}\nhttps://youtube.com/watch?v={video_id}", color=0xff0000)
                             await canal.send(content=role_mention, embed=embed)
-        # Kick e TikTok não verificados automaticamente (sem API oficial)
     salvar_dados()
 
 @live_check_loop.before_loop
@@ -812,9 +806,7 @@ class LiveConfigView(View):
     @discord.ui.button(label="Configuração", style=discord.ButtonStyle.secondary, emoji="⚙️")
     async def configuracao(self, interaction: discord.Interaction, button: Button):
         view = ConfigSteamersView(self.server_id, self)
-        config = await self.get_config()
         embed = discord.Embed(title="⚙️ CONFIGURAÇÃO DE STREAMERS", description="Gerencie os streamers e plataformas.", color=0x7289da)
-        embed.add_field(name="Ações", value="Use os botões abaixo para adicionar/remover streamers ou ligar/desligar plataformas.")
         await interaction.response.edit_message(embed=embed, view=view)
 
 class SetCanalModal(Modal, title="Definir Canal e Cargo"):
@@ -884,34 +876,71 @@ class ConfigSteamersView(View):
         embed = await self.parent_view.build_embed()
         await interaction.response.edit_message(embed=embed, view=self.parent_view)
 
-class AddStreamerByLinkModal(Modal, title="Adicionar Streamer por Link"):
-    link = TextInput(label="Link da plataforma (Twitch/YouTube/Kick/TikTok)", placeholder="Ex: https://twitch.tv/alanzoka", required=True)
-    discord_user = TextInput(label="Discord do Streamer (ID ou @, opcional)", required=False)
+class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
+    plataforma = TextInput(
+        label="PLATAFORMA (twitch/youtube/kick/tiktok)",
+        placeholder="Ex: twitch",
+        required=True
+    )
+    username = TextInput(
+        label="USERNAME DO STREAMER",
+        placeholder="Ex: alanzoka, CHICOMG, @lordntj1478, youtube.com/@lordn",
+        required=True
+    )
+    discord_user = TextInput(
+        label="DISCORD DO STREAMER (opcional)",
+        placeholder="ID ou @ do usuário",
+        required=False
+    )
     def __init__(self, server_id, parent_view):
         super().__init__()
         self.server_id = server_id
         self.parent_view = parent_view
     async def on_submit(self, interaction: discord.Interaction):
-        platform, identifier = extract_platform_from_url(self.link.value)
-        if not platform:
-            await interaction.response.send_message("Não foi possível extrair o canal do link. Verifique a URL.", ephemeral=True); return
-        uid = str(interaction.user.id)
-        if self.discord_user.value:
+        plat_input = self.plataforma.value.strip().lower()
+        username_input = self.username.value.strip()
+
+        # Tenta extrair plataforma do link, se for uma URL
+        extracted_plat, extracted_id = extract_platform_from_url(username_input)
+        if extracted_plat and extracted_id:
+            platform = extracted_plat
+            identifier = extracted_id
+        else:
+            if plat_input not in ["twitch", "youtube", "kick", "tiktok"]:
+                await interaction.response.send_message("Plataforma inválida. Escolha entre twitch, youtube, kick ou tiktok.", ephemeral=True)
+                return
+            platform = plat_input
+            identifier = username_input
+
+        # Define o Discord do streamer (opcional)
+        uid = str(interaction.user.id)  # fallback: próprio usuário
+        if self.discord_user.value.strip():
             try:
                 uid_str = self.discord_user.value.strip().replace("<@!","").replace("<@","").replace(">","")
                 uid = str(int(uid_str))
             except:
                 pass
+
         if str(self.server_id) not in dados["lives"]["streamers"]:
             dados["lives"]["streamers"][str(self.server_id)] = {}
         if uid not in dados["lives"]["streamers"][str(self.server_id)]:
-            dados["lives"]["streamers"][str(self.server_id)][uid] = {"nome": str(uid), "twitch": None, "youtube": None, "kick": None, "tiktok": None}
+            dados["lives"]["streamers"][str(self.server_id)][uid] = {
+                "nome": str(uid),
+                "twitch": None,
+                "youtube": None,
+                "kick": None,
+                "tiktok": None
+            }
         dados["lives"]["streamers"][str(self.server_id)][uid][platform] = identifier
-        if self.discord_user.value:
-            user = interaction.guild.get_member(int(uid))
-            if user: dados["lives"]["streamers"][str(self.server_id)][uid]["nome"] = user.display_name
+        if self.discord_user.value.strip():
+            try:
+                member = interaction.guild.get_member(int(uid))
+                if member:
+                    dados["lives"]["streamers"][str(self.server_id)][uid]["nome"] = member.display_name
+            except:
+                pass
         salvar_dados()
-        await interaction.response.send_message(f"Streamer adicionado em {platform}: `{identifier}`", ephemeral=True)
+        await interaction.response.send_message(f"Streamer adicionado em **{platform}**: `{identifier}`", ephemeral=True)
         embed = await self.parent_view.build_embed()
         await interaction.message.edit(embed=embed, view=self.parent_view)
 

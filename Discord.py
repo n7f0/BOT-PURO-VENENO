@@ -148,7 +148,7 @@ async def atualizar_ranking():
             tot_polvora = sum(p["quantidade"] for f in data["farms"] for p in f.get("produtos",[]) if p["produto"]=="POLVORA")
             tot_pag = sum(p["valor"] for p in data["pagamentos"])
             qtd_pag = len(data["pagamentos"])
-            din_sujo = data.get("dinheiro_sujo", 0)  # Total acumulado de dinheiro sujo
+            din_sujo = data.get("dinheiro_sujo",0)
             usuarios_data.append({"nome":user.name,"user_id":uid,"total_chumbo":tot_chumbo,"total_capsula":tot_capsula,"total_polvora":tot_polvora,"total_pagamentos":tot_pag,"quantidade_pagamentos":qtd_pag,"dinheiro_sujo":din_sujo})
         except: continue
     emb = discord.Embed(title="RANKING GERAL", description=f"Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", color=discord.Color.gold())
@@ -228,10 +228,9 @@ class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
         await self.canal.send(embed=embed)
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
-        # Print não é apagada
         await interaction.followup.send(f"R$ {valor:,.2f} registrado como dinheiro sujo para {self.user_name}!", ephemeral=True)
         await log_acao("registrar_dinheiro_sujo", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xff0000)
-        await atualizar_ranking()  # Atualiza o ranking com o novo total
+        await atualizar_ranking()
 
 class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
     chumbo = TextInput(label="CHUMBO - Quantidade", placeholder="Ex: 250", required=False)
@@ -255,9 +254,29 @@ class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
         except asyncio.TimeoutError: await interaction.followup.send("Tempo esgotado!", ephemeral=True); return
         imagem_url = msg.attachments[0].url
         if str(self.user_id) not in dados["usuarios"]: dados["usuarios"][str(self.user_id)] = {"farms":[],"pagamentos":[],"nome":self.user_name,"dinheiro_sujo":0}
+        
+        # Guarda totais antigos para verificação de meta
+        old_chumbo = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="CHUMBO")
+        old_capsula = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="CAPSULA")
+        old_polvora = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="POLVORA")
+        
         registro = {"produtos":produtos,"data":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"print_url":imagem_url,"validado":True,"farm_id":len(dados["usuarios"][str(self.user_id)]["farms"])+1}
         dados["usuarios"][str(self.user_id)]["farms"].append(registro)
         salvar_dados()
+        
+        # Calcula novos totais
+        new_chumbo = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="CHUMBO")
+        new_capsula = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="CAPSULA")
+        new_polvora = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="POLVORA")
+        
+        # Verifica metas de 600
+        canal_user = bot.get_channel(dados["canais"].get(str(self.user_id)))
+        if canal_user:
+            for nome, old, new in [("CHUMBO",old_chumbo,new_chumbo), ("CAPSULA",old_capsula,new_capsula), ("POLVORA",old_polvora,new_polvora)]:
+                if new // 600 > old // 600:
+                    excedente = new % 600
+                    await canal_user.send(f"🎉 **Parabéns! Você bateu a meta de 600 {nome}!**\nTotal acumulado: {new}\nVocê já tem {excedente} para a próxima meta de 600. Continue assim!")
+        
         embed = discord.Embed(title="FARM PRODUTOS REGISTRADA COM SUCESSO", description=f"**Usuário:** <@{self.user_id}>\n", color=discord.Color.green())
         desc = "".join(f"🔫 **{p['produto']}:** {p['quantidade']} itens\n" for p in produtos)
         embed.description += desc
@@ -300,17 +319,14 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         await log_acao("pagar", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xffa500)
         await atualizar_ranking()
 
-# ========= FechamentoCaixaModal (cálculo automático) =========
+# ========= FECHAMENTO DE CAIXA COM RESET TOTAL =========
 class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
     meta_farm = TextInput(label="Meta de Farm (Sim/Não)", placeholder="Digite Sim ou Não", required=True)
     bonus = TextInput(label="Bônus (R$) - Opcional", placeholder="Ex: 500 (deixe 0 se não houver)", required=False, default="0")
     observacao = TextInput(label="Observação (mensagem carinhosa)", placeholder="Deixe uma mensagem para o usuário...", required=False, style=discord.TextStyle.long)
 
     def __init__(self, user_id, user_name, canal):
-        super().__init__()
-        self.user_id = user_id
-        self.user_name = user_name
-        self.canal = canal
+        super().__init__(); self.user_id = user_id; self.user_name = user_name; self.canal = canal
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
@@ -322,56 +338,55 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             await interaction.followup.send("Meta de Farm deve ser 'Sim' ou 'Não'!", ephemeral=True); return
         meta = "Sim" if meta=="sim" else "Não"
 
-        # Processa bônus
-        bonus_str = self.bonus.value.strip()
-        if bonus_str == "":
-            bonus_valor = 0.0
+        bonus_str = self.bonus.value.strip() or "0"
+        try: bonus_valor = float(bonus_str.replace(",","."))
+        except ValueError: await interaction.followup.send("Valor de bônus inválido!", ephemeral=True); return
+
+        if str(self.user_id) not in dados["usuarios"]:
+            await interaction.followup.send("Usuário não encontrado.", ephemeral=True); return
+        
+        user_data = dados["usuarios"][str(self.user_id)]
+        total_sujo = user_data.get("dinheiro_sujo", 0.0)
+        
+        # Totais de produtos da semana
+        tot_chumbo = sum(p["quantidade"] for f in user_data.get("farms",[]) for p in f.get("produtos",[]) if p["produto"]=="CHUMBO")
+        tot_capsula = sum(p["quantidade"] for f in user_data.get("farms",[]) for p in f.get("produtos",[]) if p["produto"]=="CAPSULA")
+        tot_polvora = sum(p["quantidade"] for f in user_data.get("farms",[]) for p in f.get("produtos",[]) if p["produto"]=="POLVORA")
+
+        if total_sujo <= 0 and tot_chumbo==0 and tot_capsula==0 and tot_polvora==0:
+            await interaction.followup.send("Nenhum dado para fechar esta semana.", ephemeral=True); return
+
+        # Cálculo do pagamento (somente sobre o dinheiro sujo)
+        if total_sujo > 0:
+            lavagem = total_sujo * 0.25
+            restante = total_sujo - lavagem
+            faccao = restante * 0.60
+            membro_base = restante * 0.40
+            pagamento_final = membro_base + bonus_valor
         else:
-            try: bonus_valor = float(bonus_str.replace(",","."))
-            except ValueError: await interaction.followup.send("Valor de bônus inválido!", ephemeral=True); return
-
-        # Obtém dinheiro sujo acumulado
-        total_sujo = dados["usuarios"].get(str(self.user_id), {}).get("dinheiro_sujo", 0.0)
-        if total_sujo <= 0:
-            await interaction.followup.send("Este usuário não possui dinheiro sujo acumulado para fechar.", ephemeral=True); return
-
-        # Cálculos
-        lavagem = total_sujo * 0.25
-        restante = total_sujo - lavagem
-        faccao = restante * 0.60
-        membro_base = restante * 0.40
-        pagamento_final = membro_base + bonus_valor
+            lavagem = faccao = membro_base = pagamento_final = 0.0
 
         obs = self.observacao.value.strip() if self.observacao.value else None
 
-        # Exige print
         await interaction.followup.send("📸 Agora envie a **print do comprovante** aqui no canal.", ephemeral=True)
         def check(m): return m.author==interaction.user and m.channel==self.canal and m.attachments and any(a.content_type and a.content_type.startswith('image/') for a in m.attachments)
         try: msg = await bot.wait_for('message', timeout=60.0, check=check)
         except asyncio.TimeoutError: await interaction.followup.send("Tempo esgotado!", ephemeral=True); return
         imagem_url = msg.attachments[0].url
 
-        # Garante estrutura do usuário
-        if str(self.user_id) not in dados["usuarios"]:
-            dados["usuarios"][str(self.user_id)] = {"farms":[],"pagamentos":[],"nome":self.user_name,"dinheiro_sujo":0}
+        # Registra o pagamento (se houver)
+        if pagamento_final > 0:
+            user_data["pagamentos"].append({
+                "valor": pagamento_final,
+                "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "admin": interaction.user.id,
+                "admin_nome": interaction.user.name,
+                "tipo": "Fechamento de Caixa Semanal",
+                "detalhes": {"total_sujo":total_sujo,"lavagem":lavagem,"faccao":faccao,"membro_base":membro_base,"bonus":bonus_valor},
+                "print_url": imagem_url
+            })
 
-        # Registra o pagamento (somente o que o membro recebe)
-        dados["usuarios"][str(self.user_id)]["pagamentos"].append({
-            "valor": pagamento_final,
-            "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "admin": interaction.user.id,
-            "admin_nome": interaction.user.name,
-            "tipo": "Fechamento de Caixa Semanal",
-            "detalhes": {
-                "total_sujo": total_sujo,
-                "lavagem": lavagem,
-                "faccao": faccao,
-                "membro_base": membro_base,
-                "bonus": bonus_valor
-            },
-            "print_url": imagem_url
-        })
-
+        # Guarda fechamento no histórico (não será apagado)
         fechamento = {
             "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "admin": interaction.user.name,
@@ -379,51 +394,44 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
             "usuario": self.user_name,
             "usuario_id": self.user_id,
             "meta_farm": meta,
-            "total_sujo": total_sujo,
-            "lavagem": lavagem,
-            "faccao": faccao,
-            "membro_base": membro_base,
-            "bonus": bonus_valor,
-            "pagamento_final": pagamento_final,
+            "produtos": {"chumbo":tot_chumbo, "capsula":tot_capsula, "polvora":tot_polvora},
+            "dinheiro_sujo": {
+                "total": total_sujo,
+                "lavagem": lavagem,
+                "faccao": faccao,
+                "membro_base": membro_base,
+                "bonus": bonus_valor,
+                "pago": pagamento_final
+            },
             "print_url": imagem_url,
             "observacao": obs
         }
-
         if str(self.user_id) not in dados["caixa_semana"]:
             dados["caixa_semana"][str(self.user_id)] = []
         dados["caixa_semana"][str(self.user_id)].append(fechamento)
 
-        # Zera o dinheiro sujo após o fechamento
-        dados["usuarios"][str(self.user_id)]["dinheiro_sujo"] = 0
+        # ===== RESETA SEMANA DO USUÁRIO =====
+        user_data["farms"] = []
+        user_data["pagamentos"] = []
+        user_data["dinheiro_sujo"] = 0.0
+        # (quaisquer outros contadores que existissem seriam zerados)
         salvar_dados()
 
-        # Notificação ao dono do canal
-        try:
-            user = await interaction.client.fetch_user(int(self.user_id))
-            notif = discord.Embed(title="FECHAMENTO DE CAIXA", description=f"Olá {self.user_name}, seu caixa foi fechado!", color=discord.Color.orange())
-            notif.add_field(name="Meta de Farm", value=meta, inline=False)
-            notif.add_field(name="Total Farmado", value=f"R$ {total_sujo:,.2f}", inline=False)
-            notif.add_field(name="Lavagem (25%)", value=f"R$ {lavagem:,.2f}", inline=True)
-            notif.add_field(name="Facção (60% do restante)", value=f"R$ {faccao:,.2f}", inline=True)
-            notif.add_field(name="Seu Base (40%)", value=f"R$ {membro_base:,.2f}", inline=True)
-            if bonus_valor > 0:
-                notif.add_field(name="Bônus", value=f"R$ {bonus_valor:,.2f}", inline=True)
-            notif.add_field(name="💰 Total Recebido", value=f"R$ {pagamento_final:,.2f}", inline=False)
-            if obs: notif.add_field(name="💌 Mensagem", value=obs, inline=False)
-            notif.set_image(url=imagem_url)
-            await user.send(embed=notif)
-        except: pass
-
-        # Embed no canal
-        embed = discord.Embed(title="FECHAMENTO DE CAIXA SEMANAL", description=f"**{self.user_name}** fechou o caixa!", color=discord.Color.orange(), timestamp=datetime.now())
+        # Embed de resumo
+        embed = discord.Embed(title="FECHAMENTO DE CAIXA SEMANAL", description=f"**{self.user_name}** fechou a semana!", color=discord.Color.orange(), timestamp=datetime.now())
         embed.add_field(name="Meta de Farm", value=meta, inline=False)
-        embed.add_field(name="Total Farmado", value=f"R$ {total_sujo:,.2f}", inline=False)
-        embed.add_field(name="Lavagem (25%)", value=f"R$ {lavagem:,.2f}", inline=True)
-        embed.add_field(name="Facção (60%)", value=f"R$ {faccao:,.2f}", inline=True)
-        embed.add_field(name="Membro Base (40%)", value=f"R$ {membro_base:,.2f}", inline=True)
-        if bonus_valor > 0:
-            embed.add_field(name="Bônus", value=f"R$ {bonus_valor:,.2f}", inline=True)
-        embed.add_field(name="💰 Pagamento Final", value=f"R$ {pagamento_final:,.2f}", inline=False)
+        if tot_chumbo>0 or tot_capsula>0 or tot_polvora>0:
+            embed.add_field(name="Produtos", value=f"🔫 Chumbo: {tot_chumbo}\n💣 Cápsula: {tot_capsula}\n💥 Pólvora: {tot_polvora}", inline=False)
+        if total_sujo > 0:
+            embed.add_field(name="Total Farmado (Dinheiro Sujo)", value=f"R$ {total_sujo:,.2f}", inline=False)
+            embed.add_field(name="Lavagem (25%)", value=f"R$ {lavagem:,.2f}", inline=True)
+            embed.add_field(name="Facção (60%)", value=f"R$ {faccao:,.2f}", inline=True)
+            embed.add_field(name="Membro Base (40%)", value=f"R$ {membro_base:,.2f}", inline=True)
+            if bonus_valor > 0:
+                embed.add_field(name="Bônus", value=f"R$ {bonus_valor:,.2f}", inline=True)
+            embed.add_field(name="💰 Pagamento Final", value=f"R$ {pagamento_final:,.2f}", inline=False)
+        else:
+            embed.add_field(name="Pagamento", value="R$ 0,00", inline=False)
         embed.add_field(name="Responsável", value=interaction.user.mention, inline=False)
         if obs: embed.add_field(name="💌 Mensagem", value=obs, inline=False)
         embed.set_image(url=imagem_url)
@@ -432,12 +440,12 @@ class FechamentoCaixaModal(Modal, title="Fechamento de Caixa da Semana"):
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
 
-        await interaction.followup.send(f"Fechamento registrado! {self.user_name} recebe R$ {pagamento_final:,.2f}.", ephemeral=True)
+        await interaction.followup.send(f"Semana fechada! Pagamento: R$ {pagamento_final:,.2f}. Dados zerados para a nova semana.", ephemeral=True)
         await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nMeta: {meta}\nPagamento: R$ {pagamento_final}", 0xffa500)
         await log_admin("FECHAMENTO DE CAIXA", f"Usuário: {self.user_name}\nAdmin: {interaction.user.mention}\nTotal Pago: R$ {pagamento_final:,.2f}", 0xffa500)
         await atualizar_ranking()
 
-# ========= MODAIS COMPRA/VENDA (mantidos) =========
+# ========= MODAIS COMPRA/VENDA (inalterados) =========
 class VendaModal(Modal, title="Venda de Munição"):
     quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
     valor_total = TextInput(label="Valor Total (R$)", placeholder="Ex: 500", required=True)
@@ -531,9 +539,14 @@ class FarmChannelViewAdmin(View):
         embed = discord.Embed(title="HISTÓRICO DE CAIXA", description=f"Últimos {min(10, len(fechamentos))} registros", color=discord.Color.blue())
         for fech in fechamentos[-10:]:
             data = datetime.strptime(fech["data"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y")
-            txt = f"Meta: {fech.get('meta_farm','?')}\nTotal Farmado: R$ {fech.get('total_sujo',0):,.2f}\nLavagem: R$ {fech.get('lavagem',0):,.2f}\nFacção: R$ {fech.get('faccao',0):,.2f}\nMembro Base: R$ {fech.get('membro_base',0):,.2f}"
-            if fech.get('bonus',0) > 0: txt += f"\nBônus: R$ {fech['bonus']:,.2f}"
-            txt += f"\n**Pago: R$ {fech.get('pagamento_final',0):,.2f}**"
+            txt = f"Meta: {fech.get('meta_farm','?')}\n"
+            if "produtos" in fech:
+                txt += f"Chumbo: {fech['produtos']['chumbo']} | Cápsula: {fech['produtos']['capsula']} | Pólvora: {fech['produtos']['polvora']}\n"
+            if "dinheiro_sujo" in fech:
+                ds = fech["dinheiro_sujo"]
+                txt += f"Farm Sujo: R$ {ds['total']:,.2f}\nLavagem: R$ {ds['lavagem']:,.2f}\nFacção: R$ {ds['faccao']:,.2f}\nMembro Base: R$ {ds['membro_base']:,.2f}"
+                if ds.get('bonus',0)>0: txt += f"\nBônus: R$ {ds['bonus']:,.2f}"
+                txt += f"\n**Pago: R$ {ds['pago']:,.2f}**"
             if fech.get('observacao'): txt += f"\n💌 {fech['observacao']}"
             embed.add_field(name=f"📅 {data}", value=txt, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)

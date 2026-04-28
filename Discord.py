@@ -64,7 +64,7 @@ def carregar_dados():
     except:
         return False
 
-# ========= FUNÇÕES AUXILIARES (mantidas) =========
+# ========= FUNÇÕES AUXILIARES =========
 async def criar_canal_backup(tipo, nome_arquivo=None):
     categoria = bot.get_channel(CATEGORIA_BACKUP_ID)
     if not categoria: return None
@@ -223,7 +223,7 @@ class ConfirmarResetView(View):
         await interaction.response.send_message("Reset cancelado.", ephemeral=True)
         self.stop()
 
-# ========= MODAIS DE FARM (mantidos) =========
+# ========= MODAIS DE FARM (mantidos, com defer já incluído nos modais) =========
 class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
     quantidade = TextInput(label="Valor (R$)", placeholder="Ex: 5000", required=True)
     def __init__(self, user_id, user_name, canal):
@@ -338,7 +338,9 @@ class FechamentoSummaryView(View):
     @discord.ui.button(label="Continuar Fechamento", style=discord.ButtonStyle.success, emoji="✅")
     async def continuar(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
-        await interaction.response.send_modal(FechamentoCaixaModal(self.user_id, self.user_name, self.canal, self.total_sujo, self.lavagem, self.faccao, self.membro_base))
+        # Enviar modal já é uma resposta
+        modal = FechamentoCaixaModal(self.user_id, self.user_name, self.canal, self.total_sujo, self.lavagem, self.faccao, self.membro_base)
+        await interaction.response.send_modal(modal)
 
 class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
     meta_farm = TextInput(label="Meta de Farm (Sim/Não)", placeholder="Digite Sim ou Não", required=True)
@@ -460,15 +462,16 @@ class CompraVendaView(View):
     @discord.ui.button(label="Compra de Produto", style=discord.ButtonStyle.primary, emoji="🛒")
     async def compra(self, interaction: discord.Interaction, button: Button): await interaction.response.send_modal(CompraModal())
 
-# ========= VIEWS DO CANAL PRIVADO (mantidas) =========
+# ========= VIEWS DO CANAL PRIVADO =========
 class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
     novo_nome = TextInput(label="Novo nome", placeholder="Ex: farm-lucas", required=True, max_length=90)
     def __init__(self, canal): super().__init__(); self.canal = canal
     async def on_submit(self, interaction: discord.Interaction):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         nome = ''.join(c for c in self.novo_nome.value.lower().replace(" ","-") if c.isalnum() or c=='-') or "farm"
-        try: await self.canal.edit(name=nome); await interaction.response.send_message(f"Nome alterado para {nome}", ephemeral=True)
-        except Exception as e: await interaction.response.send_message(f"Erro: {str(e)[:100]}", ephemeral=True)
+        try: await self.canal.edit(name=nome); await interaction.followup.send(f"Nome alterado para {nome}", ephemeral=True)
+        except Exception as e: await interaction.followup.send(f"Erro: {str(e)[:100]}", ephemeral=True)
 
 class FarmChannelViewMembro(View):
     def __init__(self, user_id, user_name, canal_id):
@@ -496,10 +499,11 @@ class FarmChannelViewAdmin(View):
     @discord.ui.button(label="Fechar Caixa", style=discord.ButtonStyle.danger, emoji="📊", row=1)
     async def fechar_caixa(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         user_data = dados["usuarios"].get(str(self.user_id), {})
         total_sujo = user_data.get("dinheiro_sujo", 0.0)
         if total_sujo <= 0:
-            await interaction.response.send_message("Nenhum dinheiro sujo acumulado.", ephemeral=True); return
+            await interaction.followup.send("Nenhum dinheiro sujo acumulado.", ephemeral=True); return
         lavagem = total_sujo * 0.25
         restante = total_sujo - lavagem
         faccao = restante * 0.60
@@ -511,7 +515,7 @@ class FarmChannelViewAdmin(View):
         embed.add_field(name="Membro Base (40%)", value=f"R$ {membro_base:,.2f}", inline=True)
         embed.set_footer(text="Clique no botão abaixo para continuar.")
         view = FechamentoSummaryView(self.user_id, self.user_name, interaction.channel, total_sujo, lavagem, faccao, membro_base)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=False)
     @discord.ui.button(label="Mudar Nome", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
     async def mudar_nome(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
@@ -519,8 +523,9 @@ class FarmChannelViewAdmin(View):
     @discord.ui.button(label="Histórico Caixa", style=discord.ButtonStyle.secondary, emoji="📜", row=1)
     async def historico_caixa(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         fechamentos = dados["caixa_semana"].get(str(self.user_id), [])
-        if not fechamentos: await interaction.response.send_message("Nenhum fechamento.", ephemeral=True); return
+        if not fechamentos: await interaction.followup.send("Nenhum fechamento.", ephemeral=True); return
         embed = discord.Embed(title="HISTÓRICO DE CAIXA", description=f"Últimos {min(10, len(fechamentos))} registros", color=discord.Color.blue())
         for fech in fechamentos[-10:]:
             data = datetime.strptime(fech["data"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y")
@@ -534,7 +539,7 @@ class FarmChannelViewAdmin(View):
                 txt += f"\n**Pago: R$ {ds['pago']:,.2f}**"
             if fech.get('observacao'): txt += f"\n💌 {fech['observacao']}"
             embed.add_field(name=f"📅 {data}", value=txt, inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     @discord.ui.button(label="Reset Semanal", style=discord.ButtonStyle.danger, emoji="🔄", row=2)
     async def reset_semanal(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
@@ -551,16 +556,17 @@ class ConfirmResetSemanalView(View):
         self.user_id = user_id; self.user_name = user_name; self.canal = canal
     @discord.ui.button(label="Sim, resetar semana", style=discord.ButtonStyle.danger, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         if str(self.user_id) in dados["usuarios"]:
             dados["usuarios"][str(self.user_id)]["farms"] = []
             dados["usuarios"][str(self.user_id)]["pagamentos"] = []
             dados["usuarios"][str(self.user_id)]["dinheiro_sujo"] = 0.0
             salvar_dados()
-            await interaction.response.send_message("✅ Semana resetada com sucesso!", ephemeral=True)
+            await interaction.followup.send("✅ Semana resetada com sucesso!", ephemeral=True)
             await log_admin("RESET SEMANAL", f"Usuário: {self.user_name}\nAdmin: {interaction.user.mention}", 0xffa500)
             await atualizar_ranking()
         else:
-            await interaction.response.send_message("Usuário não encontrado.", ephemeral=True)
+            await interaction.followup.send("Usuário não encontrado.", ephemeral=True)
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_message("Reset cancelado.", ephemeral=True)
@@ -571,14 +577,15 @@ class ConfirmarFechamentoView(View):
     @discord.ui.button(label="Sim, fechar", style=discord.ButtonStyle.danger, emoji="✅")
     async def confirmar(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         if str(self.user_id) in dados["canais"]: del dados["canais"][str(self.user_id)]; salvar_dados()
         await self.canal.delete()
-        await interaction.response.send_message("Canal fechado!", ephemeral=True)
+        await interaction.followup.send("Canal fechado!", ephemeral=True)
         await log_acao("fechar_canal", interaction.user, f"Canal {self.canal.name} fechado", 0xff0000)
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: Button): await interaction.response.send_message("Cancelado!", ephemeral=True)
 
-# ========= MODAIS ADMIN (mantidos) =========
+# ========= MODAIS ADMIN (mantidos, com defer) =========
 class RemoverUsuarioModal(Modal, title="Remover Usuário"):
     user_id = TextInput(label="ID do usuário", required=True)
     async def on_submit(self, interaction: discord.Interaction):
@@ -624,16 +631,16 @@ class BotaoCriarCanalView(View):
     def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="Criar Meu Canal Privado", style=discord.ButtonStyle.success, emoji="🔓")
     async def criar_canal(self, interaction: discord.Interaction, button: Button):
-        if interaction.guild is None: await interaction.response.send_message("Use em um servidor!", ephemeral=True); return
-        if not interaction.guild.me.guild_permissions.manage_channels: await interaction.response.send_message("Bot precisa de permissão de Administrador.", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
+        if interaction.guild is None: await interaction.followup.send("Use em um servidor!", ephemeral=True); return
+        if not interaction.guild.me.guild_permissions.manage_channels: await interaction.followup.send("Bot precisa de permissão de Administrador.", ephemeral=True); return
         if str(interaction.user.id) in dados["canais"]:
             canal = interaction.guild.get_channel(dados["canais"][str(interaction.user.id)])
-            if canal: await interaction.response.send_message(f"Você já possui um canal! Acesse: {canal.mention}", ephemeral=True); return
+            if canal: await interaction.followup.send(f"Você já possui um canal! Acesse: {canal.mention}", ephemeral=True); return
             else: del dados["canais"][str(interaction.user.id)]; salvar_dados()
-        await interaction.response.send_message("🔄 Criando seu canal...", ephemeral=True)
         try:
             categoria = interaction.guild.get_channel(CATEGORIA_FARMS_ID)
-            if not categoria: await interaction.edit_original_response(content="Categoria não encontrada!"); return
+            if not categoria: await interaction.followup.send("Categoria não encontrada!", ephemeral=True); return
             overwrites = {
                 interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, embed_links=True, add_reactions=True, read_message_history=True),
@@ -655,9 +662,9 @@ class BotaoCriarCanalView(View):
                 embed.description += "\n\n**BOTÕES ADMINISTRATIVOS:**\n📊 **Fechar Caixa** - Fechar caixa semanal\n✏️ **Mudar Nome** - Renomear canal\n📜 **Histórico Caixa** - Ver fechamentos\n🔄 **Reset Semanal** - Limpar dados da semana\n🗑️ **Fechar Canal** - Deletar canal"
             await canal.send(embed=embed, view=view)
             await log_acao("criar_canal", interaction.user, f"Canal criado: {canal.mention}", 0x00ff00)
-            await interaction.edit_original_response(content=f"✅ Canal criado! Acesse: {canal.mention}")
+            await interaction.followup.send(f"✅ Canal criado! Acesse: {canal.mention}", ephemeral=True)
             await atualizar_ranking()
-        except Exception as e: await interaction.edit_original_response(content=f"Erro: {str(e)[:200]}")
+        except Exception as e: await interaction.followup.send(f"Erro: {str(e)[:200]}", ephemeral=True)
 
 # ========= SISTEMA DE LIVES (COM WEBS CRAPING DO TIKTOK E THUMBNAIL DA TWITCH) =========
 def extract_platform_from_url(url: str):
@@ -731,11 +738,6 @@ async def check_youtube_lives(streamers):
     return live_data
 
 async def check_tiktok_live(username):
-    """
-    Verifica se um usuário do TikTok está ao vivo usando web scraping.
-    Retorna um dicionário com 'title', 'thumbnail', 'url' se estiver ao vivo,
-    ou None se não estiver.
-    """
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -749,12 +751,10 @@ async def check_tiktok_live(username):
                 if resp.status != 200:
                     return None
                 html = await resp.text()
-                # Tenta extrair o título da live
                 title_match = re.search(r'"title":"(.*?)"', html)
                 if not title_match:
                     return None
                 title = title_match.group(1).replace('\\u002F', '/').replace('\\u0026', '&')
-                # Tenta extrair a thumbnail
                 thumb_match = re.search(r'"thumbnail_url":"(.*?)"', html)
                 thumbnail = None
                 if thumb_match:
@@ -769,7 +769,6 @@ async def check_tiktok_live(username):
         return None
 
 async def check_tiktok_lives(streamers):
-    """Verifica uma lista de usernames do TikTok e retorna {username: info}."""
     live_data = {}
     for username in streamers:
         if not username: continue
@@ -811,7 +810,6 @@ async def live_check_loop():
                             embed = discord.Embed(title="🔴 LIVE NA TWITCH", description=desc, color=0x9146ff)
                             embed.add_field(name="Título", value=live_info['title'], inline=False)
                             embed.add_field(name="Link", value=f"https://twitch.tv/{twitch_name}", inline=False)
-                            # Adiciona thumbnail da Twitch
                             if 'thumbnail_url' in live_info:
                                 thumb_url = live_info['thumbnail_url'].replace('{width}', '640').replace('{height}', '360')
                                 embed.set_image(url=thumb_url)
@@ -850,7 +848,7 @@ async def live_check_loop():
                     last_key = f"tiktok_{uid}"
                     live_info = lives[tiktok_name]
                     last = dados["lives"]["last_notified"].get(last_key)
-                    if last != live_info.get("url"):  # usa a URL como identificador
+                    if last != live_info.get("url"):
                         dados["lives"]["last_notified"][last_key] = live_info.get("url")
                         nome_streamer = data.get("nome", tiktok_name)
                         observacao = data.get("observacao", "")
@@ -862,13 +860,10 @@ async def live_check_loop():
                             embed.set_footer(text="TIKTOK • Hoje às " + datetime.now().strftime("%H:%M"))
                             if live_info.get("thumbnail"):
                                 embed.set_image(url=live_info["thumbnail"])
-
-                            # Botão "Assistir Agora"
                             view = View(timeout=None)
                             view.add_item(Button(label="Assistir Agora", style=discord.ButtonStyle.link, url=live_info.get("url")))
                             await canal.send(content=role_mention, embed=embed, view=view)
                 else:
-                    # Se não está mais ao vivo, reseta o estado de notificação
                     last_key = f"tiktok_{uid}"
                     if last_key in dados["lives"]["last_notified"]:
                         del dados["lives"]["last_notified"][last_key]
@@ -878,7 +873,7 @@ async def live_check_loop():
 async def before_live_check():
     await bot.wait_until_ready()
 
-# ========= PAINEL DE LIVES (mantido) =========
+# ========= PAINEL DE LIVES =========
 class LiveConfigView(View):
     def __init__(self, server_id):
         super().__init__(timeout=None)
@@ -915,9 +910,10 @@ class LiveConfigView(View):
 
     @discord.ui.button(label="Configuração", style=discord.ButtonStyle.secondary, emoji="⚙️")
     async def configuracao(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()  # ADICIONADO DEFER
         view = ConfigSteamersView(self.server_id, self)
         embed = discord.Embed(title="⚙️ CONFIGURAÇÃO DE STREAMERS", description="Gerencie os streamers e plataformas.", color=0x7289da)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)  # enviado como ephemeral
 
 class SetCanalModal(Modal, title="Definir Canal e Cargo"):
     canal_id = TextInput(label="ID do canal de notícias", placeholder="Ex: 123456789012345678", required=True)
@@ -927,6 +923,7 @@ class SetCanalModal(Modal, title="Definir Canal e Cargo"):
         self.server_id = server_id
         self.parent_view = parent_view
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         try:
             cid = int(self.canal_id.value.strip())
             rid = int(self.cargo_id.value.strip())
@@ -935,9 +932,9 @@ class SetCanalModal(Modal, title="Definir Canal e Cargo"):
             config["role"] = rid
             salvar_dados()
             embed = await self.parent_view.build_embed()
-            await interaction.response.edit_message(embed=embed, view=self.parent_view)
+            await interaction.followup.send(embed=embed, view=self.parent_view, ephemeral=True)
         except:
-            await interaction.response.send_message("IDs inválidos.", ephemeral=True)
+            await interaction.followup.send("IDs inválidos.", ephemeral=True)
 
 class ConfigSteamersView(View):
     def __init__(self, server_id, parent_view):
@@ -951,44 +948,50 @@ class ConfigSteamersView(View):
 
     @discord.ui.button(label="Remover Streamer", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def remove(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)  # ADICIONADO DEFER
         streamers = dados["lives"]["streamers"].get(str(self.server_id), {})
         if not streamers:
-            await interaction.response.send_message("Nenhum streamer cadastrado para remover.", ephemeral=True); return
+            await interaction.followup.send("Nenhum streamer cadastrado para remover.", ephemeral=True); return
         view = RemoveStreamerSelectView(self.server_id, self.parent_view)
-        await interaction.response.send_message("Selecione o streamer que deseja remover:", view=view, ephemeral=True)
+        await interaction.followup.send("Selecione o streamer que deseja remover:", view=view, ephemeral=True)
 
     @discord.ui.button(label="Twitch", style=discord.ButtonStyle.primary, emoji="📺", row=1)
     async def toggle_twitch(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)  # ADICIONADO DEFER
         config = dados["lives"]["config"].setdefault(str(self.server_id), {"platforms":{"twitch":True}})
         config["platforms"]["twitch"] = not config["platforms"].get("twitch", True)
         salvar_dados()
-        await interaction.response.defer()
+        await interaction.followup.send(f"Twitch {'ativado' if config['platforms']['twitch'] else 'desativado'}.", ephemeral=True)
 
     @discord.ui.button(label="YouTube", style=discord.ButtonStyle.danger, emoji="▶️", row=1)
     async def toggle_youtube(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)
         config = dados["lives"]["config"].setdefault(str(self.server_id), {"platforms":{"youtube":True}})
         config["platforms"]["youtube"] = not config["platforms"].get("youtube", True)
         salvar_dados()
-        await interaction.response.defer()
+        await interaction.followup.send(f"YouTube {'ativado' if config['platforms']['youtube'] else 'desativado'}.", ephemeral=True)
 
     @discord.ui.button(label="Kick", style=discord.ButtonStyle.success, emoji="🟢", row=1)
     async def toggle_kick(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)
         config = dados["lives"]["config"].setdefault(str(self.server_id), {"platforms":{"kick":True}})
         config["platforms"]["kick"] = not config["platforms"].get("kick", True)
         salvar_dados()
-        await interaction.response.defer()
+        await interaction.followup.send(f"Kick {'ativado' if config['platforms']['kick'] else 'desativado'}.", ephemeral=True)
 
     @discord.ui.button(label="TikTok", style=discord.ButtonStyle.secondary, emoji="🎵", row=1)
     async def toggle_tiktok(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)
         config = dados["lives"]["config"].setdefault(str(self.server_id), {"platforms":{"tiktok":True}})
         config["platforms"]["tiktok"] = not config["platforms"].get("tiktok", True)
         salvar_dados()
-        await interaction.response.defer()
+        await interaction.followup.send(f"TikTok {'ativado' if config['platforms']['tiktok'] else 'desativado'}.", ephemeral=True)
 
     @discord.ui.button(label="Voltar", style=discord.ButtonStyle.secondary, emoji="↩️", row=2)
     async def voltar(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()  # ADICIONADO DEFER
         embed = await self.parent_view.build_embed()
-        await interaction.response.edit_message(embed=embed, view=self.parent_view)
+        await interaction.followup.send(embed=embed, view=self.parent_view, ephemeral=True)
 
 class RemoveStreamerSelectView(View):
     def __init__(self, server_id, parent_view):
@@ -1016,18 +1019,19 @@ class StreamerRemoveDropdown(Select):
         self.parent_view = parent_view
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)  # ADICIONADO DEFER
         uid = self.values[0]
         if str(self.server_id) in dados["lives"]["streamers"] and uid in dados["lives"]["streamers"][str(self.server_id)]:
             nome = dados["lives"]["streamers"][str(self.server_id)][uid].get("nome", uid)
             del dados["lives"]["streamers"][str(self.server_id)][uid]
             salvar_dados()
-            await interaction.response.send_message(f"Streamer **{nome}** removido com sucesso!", ephemeral=True)
+            await interaction.followup.send(f"Streamer **{nome}** removido com sucesso!", ephemeral=True)
             try:
                 embed = await self.parent_view.build_embed()
                 await interaction.message.edit(embed=embed, view=self.parent_view)
             except: pass
         else:
-            await interaction.response.send_message("Streamer não encontrado.", ephemeral=True)
+            await interaction.followup.send("Streamer não encontrado.", ephemeral=True)
 
 class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
     plataforma = TextInput(label="PLATAFORMA (twitch/youtube/kick/tiktok)", placeholder="Ex: twitch", required=True)
@@ -1041,6 +1045,7 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
         self.parent_view = parent_view
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         plat_input = self.plataforma.value.strip().lower()
         username_input = self.username.value.strip()
         obs = self.observacao.value.strip()
@@ -1052,7 +1057,7 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
             nome_streamer = identifier
         else:
             if plat_input not in ["twitch", "youtube", "kick", "tiktok"]:
-                await interaction.response.send_message("Plataforma inválida. Escolha entre twitch, youtube, kick ou tiktok.", ephemeral=True)
+                await interaction.followup.send("Plataforma inválida. Escolha entre twitch, youtube, kick ou tiktok.", ephemeral=True)
                 return
             platform = plat_input
             identifier = username_input
@@ -1087,13 +1092,13 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
             dados["lives"]["streamers"][str(self.server_id)][uid]["observacao"] = obs
 
         salvar_dados()
-        await interaction.response.send_message(f"Streamer **{nome_streamer}** adicionado em **{platform}**!", ephemeral=True)
+        await interaction.followup.send(f"Streamer **{nome_streamer}** adicionado em **{platform}**!", ephemeral=True)
         try:
             embed = await self.parent_view.build_embed()
             await interaction.message.edit(embed=embed, view=self.parent_view)
         except: pass
 
-# ========= PAINEL DE AÇÕES (mantido) =========
+# ========= PAINEL DE AÇÕES =========
 class ActionPanelView(View):
     def __init__(self, server_id):
         super().__init__(timeout=None)
@@ -1107,12 +1112,13 @@ class ActionPanelView(View):
     async def payment(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user):
             await interaction.response.send_message("Apenas administradores podem gerenciar pagamentos.", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         server_actions = dados["acoes"].get(str(self.server_id), {})
         unpaid = {k: v for k, v in server_actions.items() if not v.get("pago", False)}
         if not unpaid:
-            await interaction.response.send_message("Nenhuma ação pendente de pagamento.", ephemeral=True); return
+            await interaction.followup.send("Nenhuma ação pendente de pagamento.", ephemeral=True); return
         view = ActionSelectView(self.server_id, unpaid)
-        await interaction.response.send_message("Selecione a ação:", view=view, ephemeral=True)
+        await interaction.followup.send("Selecione a ação:", view=view, ephemeral=True)
 
 class ActionModal(Modal, title="Registrar Ação"):
     nome_acao = TextInput(label="Ação (nome do lugar)", placeholder="Ex: Assalto ao Banco Central", required=True)
@@ -1126,19 +1132,20 @@ class ActionModal(Modal, title="Registrar Ação"):
         self.server_id = server_id
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         try: valor_num = float(self.valor.value.replace(",","."))
-        except ValueError: await interaction.response.send_message("Valor inválido!", ephemeral=True); return
+        except ValueError: await interaction.followup.send("Valor inválido!", ephemeral=True); return
         try: dark_num = int(self.darkcoin.value)
-        except ValueError: await interaction.response.send_message("Darkcoin inválida!", ephemeral=True); return
+        except ValueError: await interaction.followup.send("Darkcoin inválida!", ephemeral=True); return
         result = self.resultado.value.strip().lower()
         if result not in ["vitória","derrota","vitoria"]:
-            await interaction.response.send_message("Resultado deve ser 'Vitória' ou 'Derrota'.", ephemeral=True); return
+            await interaction.followup.send("Resultado deve ser 'Vitória' ou 'Derrota'.", ephemeral=True); return
         result = "Vitória" if result in ["vitória","vitoria"] else "Derrota"
         data_str = self.data_acao.value.strip()
         try:
             datetime.strptime(data_str, "%d/%m/%Y")
         except ValueError:
-            await interaction.response.send_message("Data inválida! Use DD/MM/AAAA.", ephemeral=True); return
+            await interaction.followup.send("Data inválida! Use DD/MM/AAAA.", ephemeral=True); return
         self.action_info = {
             "nome_acao": self.nome_acao.value.strip(),
             "valor": valor_num,
@@ -1148,7 +1155,7 @@ class ActionModal(Modal, title="Registrar Ação"):
             "puxado_por": interaction.user.id
         }
         view = MemberSelectView(self.server_id, self.action_info)
-        await interaction.response.send_message("Selecione os membros que participaram da ação:", view=view, ephemeral=True)
+        await interaction.followup.send("Selecione os membros que participaram da ação:", view=view, ephemeral=True)
 
 class MemberSelectView(View):
     def __init__(self, server_id, action_data):
@@ -1164,10 +1171,11 @@ class MemberSelectView(View):
 
     @discord.ui.button(label="Confirmar e Enviar Print", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         if not self.selected_members:
-            await interaction.response.send_message("Selecione pelo menos um membro.", ephemeral=True); return
+            await interaction.followup.send("Selecione pelo menos um membro.", ephemeral=True); return
         self.action_data["membros"] = self.selected_members
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"Membros selecionados: {len(self.selected_members)}. **Envie a primeira print da ação** (. Você pode enviar várias, uma por vez).",
             ephemeral=True
         )
@@ -1230,10 +1238,11 @@ class ActionDropdown(Select):
         super().__init__(placeholder="Escolha uma ação...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
         action_id = self.values[0]
         action = dados["acoes"].get(str(interaction.guild_id), {}).get(action_id)
         if not action:
-            await interaction.response.send_message("Ação não encontrada.", ephemeral=True); return
+            await interaction.followup.send("Ação não encontrada.", ephemeral=True); return
         valor = action["valor"]
         lavagem = valor * 0.25
         liquido = valor - lavagem
@@ -1248,7 +1257,7 @@ class ActionDropdown(Select):
         embed.add_field(name="Dividido por", value=f"{n_membros} membros", inline=True)
         embed.add_field(name="Cada membro recebe", value=f"R$ {por_membro:,.2f}", inline=True)
         view = ConfirmPaymentView(interaction.guild_id, action_id, liquido, por_membro, action["membros"])
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 class ConfirmPaymentView(View):
     def __init__(self, server_id, action_id, valor_liquido, valor_por_membro, membros):
@@ -1261,7 +1270,8 @@ class ConfirmPaymentView(View):
 
     @discord.ui.button(label="Confirmar Pagamento", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message(
+        await interaction.response.defer(ephemeral=True, thinking=True)  # ADICIONADO DEFER
+        await interaction.followup.send(
             "Envie as **prints dos comprovantes** (quantas quiser). Quando terminar, digite `pronto`.",
             ephemeral=True
         )
@@ -1365,4 +1375,4 @@ async def on_ready():
 
 if __name__ == "__main__":
     carregar_dados()
-    bot.run(TOKEN) 
+    bot.run(TOKEN)

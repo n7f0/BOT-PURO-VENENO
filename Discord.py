@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands, tasks
-from discord.ui import Button, View, Modal, TextInput
+from discord.ui import Button, View, Modal, TextInput, Select
 import asyncio
 from datetime import datetime
 import json
@@ -41,7 +41,7 @@ dados = {
     "usuarios_banidos": [],
     "dinheiro_sujo": {},
     "lives": {
-        "streamers": {},
+        "streamers": {},   # {user_id: {"nome": ..., "twitch": ..., "youtube": ..., "kick": ..., "tiktok": ..., "status": {"twitch": bool, ...}}}
         "last_notified": {}
     }
 }
@@ -55,6 +55,8 @@ def carregar_dados():
         with open("dados_bot.json", "r", encoding="utf-8") as f:
             loaded = json.load(f)
             dados.update(loaded)
+            if "status" not in dados["lives"]:  # compatibilidade
+                dados["lives"]["status"] = {}
         return True
     except:
         return False
@@ -412,7 +414,7 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nPagamento: R$ {pagamento_final}", 0xffa500)
         await atualizar_ranking()
 
-# ========= COMPRA/VENDA =========
+# ========= COMPRA/VENDA (mantido) =========
 class VendaModal(Modal, title="Venda de Munição"):
     quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
     valor_total = TextInput(label="Valor Total (R$)", placeholder="Ex: 500", required=True)
@@ -654,7 +656,7 @@ class BotaoCriarCanalView(View):
             await atualizar_ranking()
         except Exception as e: await interaction.edit_original_response(content=f"Erro: {str(e)[:200]}")
 
-# ========= SISTEMA DE LIVES =========
+# ========= SISTEMA DE LIVES (NOVO PAINEL) =========
 twitch_token = None
 twitch_token_expiry = 0
 
@@ -714,11 +716,8 @@ async def check_youtube_lives():
     return live_data
 
 async def check_kick_lives():
-    # Placeholder – API do Kick ainda não é pública e estável
     return {}
-
 async def check_tiktok_lives():
-    # Placeholder – TikTok não possui API de notificação de lives facilmente acessível
     return {}
 
 @tasks.loop(minutes=1)
@@ -726,103 +725,211 @@ async def live_check_loop():
     twitch_lives = await check_twitch_lives()
     youtube_lives = await check_youtube_lives()
     for uid, streamer in dados["lives"]["streamers"].items():
-        user = bot.get_user(int(uid)) or await bot.fetch_user(int(uid)) if uid.isdigit() else None
-        if not user: continue
         last = dados["lives"]["last_notified"].setdefault(uid, {})
+        status = streamer.setdefault("status", {})
         canal_painel = bot.get_channel(CANAL_LIVES_PAINEL_ID)
-        if not canal_painel: continue
+        # Twitch
         twitch_name = streamer.get("twitch")
         if twitch_name and twitch_name.lower() in twitch_lives:
             live_info = twitch_lives[twitch_name.lower()]
+            status["twitch"] = True
             if last.get("twitch") != live_info["id"]:
-                embed = discord.Embed(title="🔴 LIVE NA TWITCH", description=f"**{user.name}** está ao vivo!\n{live_info['title']}\nhttps://twitch.tv/{twitch_name}", color=0x9146ff)
-                await canal_painel.send(embed=embed)
                 last["twitch"] = live_info["id"]
+                if canal_painel:
+                    embed = discord.Embed(title="🔴 LIVE NA TWITCH", description=f"**{streamer.get('nome', uid)}** está ao vivo!\n{live_info['title']}\nhttps://twitch.tv/{twitch_name}", color=0x9146ff)
+                    await canal_painel.send(embed=embed)
+        else:
+            status["twitch"] = False
+        # YouTube
         yt_channel = streamer.get("youtube")
         if yt_channel and yt_channel in youtube_lives:
             video = youtube_lives[yt_channel]
             video_id = video["id"]["videoId"]
+            status["youtube"] = True
             if last.get("youtube") != video_id:
-                embed = discord.Embed(title="🔴 LIVE NO YOUTUBE", description=f"**{user.name}** está ao vivo!\n{video['snippet']['title']}\nhttps://youtube.com/watch?v={video_id}", color=0xff0000)
-                await canal_painel.send(embed=embed)
                 last["youtube"] = video_id
+                if canal_painel:
+                    embed = discord.Embed(title="🔴 LIVE NO YOUTUBE", description=f"**{streamer.get('nome', uid)}** está ao vivo!\n{video['snippet']['title']}\nhttps://youtube.com/watch?v={video_id}", color=0xff0000)
+                    await canal_painel.send(embed=embed)
+        else:
+            status["youtube"] = False
+        # Kick e TikTok permanecem offline (placeholder)
+        status["kick"] = False
+        status["tiktok"] = False
     salvar_dados()
 
 @live_check_loop.before_loop
 async def before_live_check():
     await bot.wait_until_ready()
 
+# ========= PAINEL DE LIVES (versão completa) =========
 class LivePainelView(View):
-    def __init__(self): super().__init__(timeout=None)
-    @discord.ui.button(label="Adicionar Streamer", style=discord.ButtonStyle.success, emoji="➕")
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.pagina = 0
+        self.por_pagina = 5
+        self.message = None
+
+    async def update_message(self, interaction: discord.Interaction = None):
+        embed = self.gerar_embed()
+        if interaction:
+            await interaction.response.edit_message(embed=embed, view=self)
+        elif self.message:
+            await self.message.edit(embed=embed, view=self)
+
+    def gerar_embed(self):
+        streamers = list(dados["lives"]["streamers"].items())
+        total = len(streamers)
+        max_pag = max(0, (total - 1) // self.por_pagina)
+        if self.pagina > max_pag:
+            self.pagina = max_pag
+        inicio = self.pagina * self.por_pagina
+        fim = inicio + self.por_pagina
+        pagina_streamers = streamers[inicio:fim]
+
+        embed = discord.Embed(title="🔔 PAINEL DE NOTIFICAÇÕES DE LIVES", color=0x9b59b6)
+        embed.description = "Gerencie os streamers e veja o status ao vivo!\n\n"
+
+        if not streamers:
+            embed.description += "Nenhum streamer cadastrado."
+            embed.set_footer(text="Página 0/0")
+            return embed
+
+        for uid, data in pagina_streamers:
+            nome = data.get("nome", uid)
+            twitch = data.get("twitch")
+            youtube = data.get("youtube")
+            kick = data.get("kick")
+            tiktok = data.get("tiktok")
+            status = data.get("status", {})
+
+            linhas = []
+            if twitch:
+                online = "🟢" if status.get("twitch") else "🔴"
+                linhas.append(f"{online} Twitch: {twitch}")
+            if youtube:
+                online = "🟢" if status.get("youtube") else "🔴"
+                linhas.append(f"{online} YouTube: {youtube}")
+            if kick:
+                online = "🔴"  # sempre offline por enquanto
+                linhas.append(f"{online} Kick: {kick}")
+            if tiktok:
+                online = "🔴"
+                linhas.append(f"{online} TikTok: {tiktok}")
+
+            if linhas:
+                embed.add_field(name=f"{nome} (ID: {uid})", value="\n".join(linhas), inline=False)
+            else:
+                embed.add_field(name=f"{nome} (ID: {uid})", value="Nenhuma plataforma configurada.", inline=False)
+
+        embed.set_footer(text=f"Página {self.pagina+1}/{max_pag+1} | Total: {total}")
+        return embed
+
+    @discord.ui.button(label="⬅️ Anterior", style=discord.ButtonStyle.secondary, row=1)
+    async def pagina_anterior(self, interaction: discord.Interaction, button: Button):
+        if self.pagina > 0:
+            self.pagina -= 1
+            await self.update_message(interaction)
+        else:
+            await interaction.response.defer()
+
+    @discord.ui.button(label="➡️ Próxima", style=discord.ButtonStyle.secondary, row=1)
+    async def pagina_proxima(self, interaction: discord.Interaction, button: Button):
+        total = len(dados["lives"]["streamers"])
+        max_pag = (total - 1) // self.por_pagina
+        if self.pagina < max_pag:
+            self.pagina += 1
+            await self.update_message(interaction)
+        else:
+            await interaction.response.defer()
+
+    @discord.ui.button(label="➕ Adicionar Streamer", style=discord.ButtonStyle.success, emoji="➕", row=2)
     async def add_streamer(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(AdicionarStreamerModal())
-    @discord.ui.button(label="Remover Streamer", style=discord.ButtonStyle.danger, emoji="➖")
+        await interaction.response.send_modal(AdicionarStreamerModal(self))
+
+    @discord.ui.button(label="🗑️ Remover Streamer", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
     async def remove_streamer(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(RemoverStreamerModal())
-    @discord.ui.button(label="Gerenciar Plataformas", style=discord.ButtonStyle.primary, emoji="🔧")
-    async def gerenciar_plats(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(GerenciarPlataformasModal())
-    @discord.ui.button(label="Testar Notificação", style=discord.ButtonStyle.secondary, emoji="🔔")
-    async def testar_notif(self, interaction: discord.Interaction, button: Button):
-        embed = discord.Embed(title="🔔 Teste de Notificação", description="Se você viu esta mensagem, as notificações estão funcionando.", color=discord.Color.green())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_modal(RemoverStreamerModal(self))
+
+    @discord.ui.button(label="🔧 Configurações", style=discord.ButtonStyle.primary, emoji="🔧", row=2)
+    async def configuracoes(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(GerenciarPlataformasModal(self))
 
 class AdicionarStreamerModal(Modal, title="Adicionar Streamer"):
-    usuario_discord = TextInput(label="ID ou @ do usuário do Discord", required=True)
-    twitch = TextInput(label="Twitch (nome do canal)", required=False)
-    youtube = TextInput(label="YouTube (ID do canal)", required=False)
-    kick = TextInput(label="Kick (nome do canal) – ainda não suportado", required=False)
-    tiktok = TextInput(label="TikTok (username) – ainda não suportado", required=False)
+    plataforma = TextInput(label="Plataforma (twitch/youtube/kick/tiktok)", placeholder="Ex: twitch", required=True)
+    username = TextInput(label="Username do Streamer", placeholder="Ex: alanzoka", required=True)
+    discord_id = TextInput(label="Discord do Streamer (ID ou @)", placeholder="Opcional", required=False)
+    def __init__(self, painel_view):
+        super().__init__()
+        self.painel_view = painel_view
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            uid = self.usuario_discord.value.strip().replace("<@!", "").replace("<@", "").replace(">", "")
-            user = await bot.fetch_user(int(uid))
-        except:
-            await interaction.response.send_message("Usuário inválido.", ephemeral=True); return
-        streamer = {
-            "nome": user.name,
-            "twitch": self.twitch.value.strip() or None,
-            "youtube": self.youtube.value.strip() or None,
-            "kick": self.kick.value.strip() or None,
-            "tiktok": self.tiktok.value.strip() or None
-        }
-        dados["lives"]["streamers"][str(user.id)] = streamer
-        dados["lives"]["last_notified"].setdefault(str(user.id), {})
+        plat = self.plataforma.value.strip().lower()
+        if plat not in ["twitch","youtube","kick","tiktok"]:
+            await interaction.response.send_message("Plataforma inválida.", ephemeral=True); return
+        user_id = None
+        nome = self.username.value.strip()
+        disc = self.discord_id.value.strip()
+        if disc:
+            try:
+                uid = int(disc.replace("<@!","").replace("<@","").replace(">",""))
+                user = await bot.fetch_user(uid)
+                user_id = str(user.id)
+                nome = nome or user.name
+            except:
+                pass
+        if not user_id:
+            user_id = str(interaction.user.id)  # fallback
+        if user_id not in dados["lives"]["streamers"]:
+            dados["lives"]["streamers"][user_id] = {"nome": nome, "twitch": None, "youtube": None, "kick": None, "tiktok": None, "status": {}}
+        streamer = dados["lives"]["streamers"][user_id]
+        streamer[plat] = self.username.value.strip()
+        streamer["nome"] = nome
         salvar_dados()
-        await interaction.response.send_message(f"Streamer {user.mention} adicionado!", ephemeral=True)
+        await interaction.response.send_message(f"Streamer `{nome}` adicionado em {plat}!", ephemeral=True)
+        await self.painel_view.update_message()
 
 class RemoverStreamerModal(Modal, title="Remover Streamer"):
-    usuario_discord = TextInput(label="ID ou @ do usuário", required=True)
+    usuario_discord = TextInput(label="ID do usuário do Discord", placeholder="Ex: 123456", required=True)
+    def __init__(self, painel_view):
+        super().__init__()
+        self.painel_view = painel_view
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            uid = self.usuario_discord.value.strip().replace("<@!", "").replace("<@", "").replace(">", "")
+            uid = int(self.usuario_discord.value.strip().replace("<@!","").replace("<@","").replace(">",""))
         except:
             await interaction.response.send_message("ID inválido.", ephemeral=True); return
         if str(uid) in dados["lives"]["streamers"]:
             del dados["lives"]["streamers"][str(uid)]
             salvar_dados()
             await interaction.response.send_message("Streamer removido.", ephemeral=True)
+            await self.painel_view.update_message()
         else:
-            await interaction.response.send_message("Usuário não encontrado como streamer.", ephemeral=True)
+            await interaction.response.send_message("Streamer não encontrado.", ephemeral=True)
 
 class GerenciarPlataformasModal(Modal, title="Gerenciar Plataformas"):
     usuario_discord = TextInput(label="ID do usuário", required=True)
-    twitch = TextInput(label="Novo Twitch (deixe vazio para manter)", required=False)
-    youtube = TextInput(label="Novo YouTube (deixe vazio para manter)", required=False)
-    kick = TextInput(label="Novo Kick (deixe vazio para manter)", required=False)
-    tiktok = TextInput(label="Novo TikTok (deixe vazio para manter)", required=False)
+    twitch = TextInput(label="Twitch (deixe vazio para manter)", required=False)
+    youtube = TextInput(label="YouTube (deixe vazio para manter)", required=False)
+    kick = TextInput(label="Kick (deixe vazio para manter)", required=False)
+    tiktok = TextInput(label="TikTok (deixe vazio para manter)", required=False)
+    def __init__(self, painel_view):
+        super().__init__()
+        self.painel_view = painel_view
     async def on_submit(self, interaction: discord.Interaction):
-        uid = self.usuario_discord.value.strip().replace("<@!", "").replace("<@", "").replace(">", "")
-        if uid not in dados["lives"]["streamers"]:
+        try:
+            uid = int(self.usuario_discord.value.strip().replace("<@!","").replace("<@","").replace(">",""))
+        except:
+            await interaction.response.send_message("ID inválido.", ephemeral=True); return
+        if str(uid) not in dados["lives"]["streamers"]:
             await interaction.response.send_message("Streamer não encontrado.", ephemeral=True); return
-        streamer = dados["lives"]["streamers"][uid]
+        streamer = dados["lives"]["streamers"][str(uid)]
         if self.twitch.value.strip(): streamer["twitch"] = self.twitch.value.strip()
         if self.youtube.value.strip(): streamer["youtube"] = self.youtube.value.strip()
         if self.kick.value.strip(): streamer["kick"] = self.kick.value.strip()
         if self.tiktok.value.strip(): streamer["tiktok"] = self.tiktok.value.strip()
         salvar_dados()
         await interaction.response.send_message("Plataformas atualizadas!", ephemeral=True)
+        await self.painel_view.update_message()
 
 # ========= EVENTOS =========
 @bot.event
@@ -866,9 +973,10 @@ async def on_ready():
         if canal_lives:
             async for msg in canal_lives.history(limit=5):
                 if msg.author == bot.user: await msg.delete()
-            embed = discord.Embed(title="🔔 PAINEL DE NOTIFICAÇÕES DE LIVES", description="Gerencie os streamers e receba alertas quando eles entrarem ao vivo!\n\n**Plataformas ativas:** Twitch e YouTube", color=0x9b59b6)
-            embed.add_field(name="Como usar", value="• Adicionar Streamer\n• Remover Streamer\n• Gerenciar Plataformas\n• Testar Notificação", inline=False)
-            await canal_lives.send(embed=embed, view=LivePainelView())
+            painel_view = LivePainelView()
+            embed = painel_view.gerar_embed()
+            msg = await canal_lives.send(embed=embed, view=painel_view)
+            painel_view.message = msg
     await atualizar_ranking()
     await log_admin("🤖 BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)
 

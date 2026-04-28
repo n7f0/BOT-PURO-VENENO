@@ -319,17 +319,12 @@ class PagamentoFarmModal(Modal, title="Registrar Pagamento"):
         await log_acao("pagar", interaction.user, f"Usuário: {self.user_name}\nValor: R$ {valor:,.2f}", 0xffa500)
         await atualizar_ranking()
 
-# ========= NOVO RESUMO PRÉ-FECHAMENTO =========
+# ========= RESUMO PRÉ-FECHAMENTO =========
 class FechamentoSummaryView(View):
     def __init__(self, user_id, user_name, canal, total_sujo, lavagem, faccao, membro_base):
         super().__init__(timeout=300)
-        self.user_id = user_id
-        self.user_name = user_name
-        self.canal = canal
-        self.total_sujo = total_sujo
-        self.lavagem = lavagem
-        self.faccao = faccao
-        self.membro_base = membro_base
+        self.user_id = user_id; self.user_name = user_name; self.canal = canal
+        self.total_sujo = total_sujo; self.lavagem = lavagem; self.faccao = faccao; self.membro_base = membro_base
 
     @discord.ui.button(label="Continuar Fechamento", style=discord.ButtonStyle.success, emoji="✅")
     async def continuar(self, interaction: discord.Interaction, button: Button):
@@ -337,7 +332,7 @@ class FechamentoSummaryView(View):
             await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
         await interaction.response.send_modal(FechamentoCaixaModal(self.user_id, self.user_name, self.canal, self.total_sujo, self.lavagem, self.faccao, self.membro_base))
 
-# ========= FECHAMENTO DE CAIXA COM RESET TOTAL =========
+# ========= FECHAMENTO DE CAIXA (não zera dados) =========
 class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
     meta_farm = TextInput(label="Meta de Farm (Sim/Não)", placeholder="Digite Sim ou Não", required=True)
     bonus = TextInput(label="Bônus (R$) - Opcional", placeholder="Ex: 500 (deixe 0 se não houver)", required=False, default="0")
@@ -345,13 +340,8 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
 
     def __init__(self, user_id, user_name, canal, total_sujo, lavagem, faccao, membro_base):
         super().__init__()
-        self.user_id = user_id
-        self.user_name = user_name
-        self.canal = canal
-        self.total_sujo = total_sujo
-        self.lavagem = lavagem
-        self.faccao = faccao
-        self.membro_base = membro_base
+        self.user_id = user_id; self.user_name = user_name; self.canal = canal
+        self.total_sujo = total_sujo; self.lavagem = lavagem; self.faccao = faccao; self.membro_base = membro_base
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
@@ -368,7 +358,6 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         except ValueError: await interaction.followup.send("Valor de bônus inválido!", ephemeral=True); return
 
         obs = self.observacao.value.strip() if self.observacao.value else None
-
         pagamento_final = self.membro_base + bonus_valor
 
         await interaction.followup.send("📸 Agora envie a **print do comprovante** aqui no canal.", ephemeral=True)
@@ -377,8 +366,11 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         except asyncio.TimeoutError: await interaction.followup.send("Tempo esgotado!", ephemeral=True); return
         imagem_url = msg.attachments[0].url
 
-        user_data = dados["usuarios"].get(str(self.user_id), {"farms":[],"pagamentos":[],"nome":self.user_name,"dinheiro_sujo":0})
+        if str(self.user_id) not in dados["usuarios"]:
+            dados["usuarios"][str(self.user_id)] = {"farms":[],"pagamentos":[],"nome":self.user_name,"dinheiro_sujo":0}
+        user_data = dados["usuarios"][str(self.user_id)]
 
+        # Registra o pagamento (sem zerar os dados)
         if pagamento_final > 0:
             user_data["pagamentos"].append({
                 "valor": pagamento_final,
@@ -390,9 +382,9 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
                 "print_url": imagem_url
             })
 
-        tot_chumbo = sum(p["quantidade"] for f in user_data.get("farms",[]) for p in f["produtos"] if p["produto"]=="CHUMBO")
-        tot_capsula = sum(p["quantidade"] for f in user_data.get("farms",[]) for p in f["produtos"] if p["produto"]=="CAPSULA")
-        tot_polvora = sum(p["quantidade"] for f in user_data.get("farms",[]) for p in f["produtos"] if p["produto"]=="POLVORA")
+        tot_chumbo = sum(p["quantidade"] for f in user_data["farms"] for p in f["produtos"] if p["produto"]=="CHUMBO")
+        tot_capsula = sum(p["quantidade"] for f in user_data["farms"] for p in f["produtos"] if p["produto"]=="CAPSULA")
+        tot_polvora = sum(p["quantidade"] for f in user_data["farms"] for p in f["produtos"] if p["produto"]=="POLVORA")
 
         fechamento = {
             "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -416,11 +408,6 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         if str(self.user_id) not in dados["caixa_semana"]:
             dados["caixa_semana"][str(self.user_id)] = []
         dados["caixa_semana"][str(self.user_id)].append(fechamento)
-
-        # Zera dados da semana
-        user_data["farms"] = []
-        user_data["pagamentos"] = []
-        user_data["dinheiro_sujo"] = 0.0
         salvar_dados()
 
         embed = discord.Embed(title="FECHAMENTO DE CAIXA SEMANAL", description=f"**{self.user_name}** fechou a semana!", color=discord.Color.orange(), timestamp=datetime.now())
@@ -442,7 +429,7 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
 
-        await interaction.followup.send(f"Semana fechada! Pagamento: R$ {pagamento_final:,.2f}. Dados zerados para a nova semana.", ephemeral=True)
+        await interaction.followup.send(f"Pagamento de R$ {pagamento_final:,.2f} registrado com sucesso! Os dados da semana foram mantidos.", ephemeral=True)
         await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nMeta: {meta}\nPagamento: R$ {pagamento_final}", 0xffa500)
         await log_admin("FECHAMENTO DE CAIXA", f"Usuário: {self.user_name}\nAdmin: {interaction.user.mention}\nTotal Pago: R$ {pagamento_final:,.2f}", 0xffa500)
         await atualizar_ranking()
@@ -543,7 +530,7 @@ class FarmChannelViewAdmin(View):
         embed.add_field(name="Membro Base (40%)", value=f"R$ {membro_base:,.2f}", inline=True)
         embed.set_footer(text="Clique no botão abaixo para continuar com o fechamento.")
         view = FechamentoSummaryView(self.user_id, self.user_name, interaction.channel, total_sujo, lavagem, faccao, membro_base)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)  # público no canal
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
     @discord.ui.button(label="Mudar Nome", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
     async def mudar_nome(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return

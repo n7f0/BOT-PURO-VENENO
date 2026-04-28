@@ -9,6 +9,15 @@ import sys
 import aiohttp
 import re
 
+# Tentar importar TikTokLive (se falhar, o bot funcionará sem TikTok)
+try:
+    from TikTokLive import TikTokLiveClient
+    from TikTokLive.events import ConnectEvent
+    TIKTOK_AVAILABLE = True
+except ImportError:
+    TIKTOK_AVAILABLE = False
+    print("⚠️ TikTokLive não instalado. Notificações do TikTok não funcionarão.")
+
 # ========= CONFIGURAÇÕES =========
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
@@ -64,6 +73,7 @@ def carregar_dados():
     except:
         return False
 
+# ========= FUNÇÕES AUXILIARES =========
 async def criar_canal_backup(tipo, nome_arquivo=None):
     categoria = bot.get_channel(CATEGORIA_BACKUP_ID)
     if not categoria: return None
@@ -222,6 +232,7 @@ class ConfirmarResetView(View):
         await interaction.response.send_message("Reset cancelado.", ephemeral=True)
         self.stop()
 
+# ========= MODAIS DE FARM (mantidos) =========
 class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
     quantidade = TextInput(label="Valor (R$)", placeholder="Ex: 5000", required=True)
     def __init__(self, user_id, user_name, canal):
@@ -412,6 +423,7 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nPagamento: R$ {pagamento_final}", 0xffa500)
         await atualizar_ranking()
 
+# ========= COMPRA/VENDA =========
 class VendaModal(Modal, title="Venda de Munição"):
     quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
     valor_total = TextInput(label="Valor Total (R$)", placeholder="Ex: 500", required=True)
@@ -457,6 +469,7 @@ class CompraVendaView(View):
     @discord.ui.button(label="Compra de Produto", style=discord.ButtonStyle.primary, emoji="🛒")
     async def compra(self, interaction: discord.Interaction, button: Button): await interaction.response.send_modal(CompraModal())
 
+# ========= VIEWS DO CANAL PRIVADO =========
 class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
     novo_nome = TextInput(label="Novo nome", placeholder="Ex: farm-lucas", required=True, max_length=90)
     def __init__(self, canal): super().__init__(); self.canal = canal
@@ -574,6 +587,7 @@ class ConfirmarFechamentoView(View):
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: Button): await interaction.response.send_message("Cancelado!", ephemeral=True)
 
+# ========= MODAIS ADMIN =========
 class RemoverUsuarioModal(Modal, title="Remover Usuário"):
     user_id = TextInput(label="ID do usuário", required=True)
     async def on_submit(self, interaction: discord.Interaction):
@@ -614,6 +628,7 @@ class BackupView(View):
         await interaction.followup.send(f"{len(backups)} backups deletados!", ephemeral=True)
         await log_admin("BACKUPS DELETADOS", f"Admin: {interaction.user.mention}\nQtd: {len(backups)}", 0xff0000)
 
+# ========= BOTÃO CRIAR CANAL =========
 class BotaoCriarCanalView(View):
     def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="Criar Meu Canal Privado", style=discord.ButtonStyle.success, emoji="🔓")
@@ -653,7 +668,7 @@ class BotaoCriarCanalView(View):
             await atualizar_ranking()
         except Exception as e: await interaction.edit_original_response(content=f"Erro: {str(e)[:200]}")
 
-# ========= SISTEMA DE LIVES (com correções de nome e observação) =========
+# ========= SISTEMA DE LIVES (COM TIKTOK) =========
 def extract_platform_from_url(url: str):
     url = url.strip().lower()
     if "twitch.tv" in url:
@@ -724,6 +739,31 @@ async def check_youtube_lives(streamers):
                         live_data[ch_id] = item
     return live_data
 
+async def check_tiktok_live(username):
+    """Retorna True se o usuário do TikTok estiver ao vivo, False caso contrário."""
+    if not TIKTOK_AVAILABLE:
+        return False
+    try:
+        client = TikTokLiveClient(unique_id=f"@{username}")
+        await asyncio.wait_for(client._connect(), timeout=8.0)
+        await client._disconnect()
+        return True
+    except:
+        return False
+
+async def check_tiktok_lives(streamers):
+    """Verifica uma lista de usernames do TikTok e retorna {username: info}."""
+    live_data = {}
+    for username in streamers:
+        if not username: continue
+        is_live = await check_tiktok_live(username)
+        if is_live:
+            live_data[username] = {
+                "title": f"Live de @{username}",
+                "url": f"https://tiktok.com/@{username}"
+            }
+    return live_data
+
 @tasks.loop(minutes=1)
 async def live_check_loop():
     for server_id_str in dados["lives"]["config"]:
@@ -736,6 +776,8 @@ async def live_check_loop():
         role_id = config.get("role")
         role_mention = f"<@&{role_id}>" if role_id else ""
         streamers_dict = dados["lives"]["streamers"].get(server_id_str, {})
+
+        # Twitch
         if plataformas.get("twitch"):
             twitch_users = [data.get("twitch") for data in streamers_dict.values() if data.get("twitch")]
             lives = await check_twitch_lives(twitch_users)
@@ -756,6 +798,8 @@ async def live_check_loop():
                             embed.add_field(name="Título", value=live_info['title'], inline=False)
                             embed.add_field(name="Link", value=f"https://twitch.tv/{twitch_name}", inline=False)
                             await canal.send(content=role_mention, embed=embed)
+
+        # YouTube
         if plataformas.get("youtube"):
             yt_users = [data.get("youtube") for data in streamers_dict.values() if data.get("youtube")]
             lives = await check_youtube_lives(yt_users)
@@ -777,12 +821,39 @@ async def live_check_loop():
                             embed.add_field(name="Título", value=video['snippet']['title'], inline=False)
                             embed.add_field(name="Link", value=f"https://youtube.com/watch?v={video_id}", inline=False)
                             await canal.send(content=role_mention, embed=embed)
+
+        # TikTok
+        if plataformas.get("tiktok"):
+            tiktok_users = [data.get("tiktok") for data in streamers_dict.values() if data.get("tiktok")]
+            lives = await check_tiktok_lives(tiktok_users)
+            for uid, data in streamers_dict.items():
+                tiktok_name = data.get("tiktok")
+                if tiktok_name and tiktok_name in lives:
+                    last_key = f"tiktok_{uid}"
+                    live_info = lives[tiktok_name]
+                    last = dados["lives"]["last_notified"].get(last_key)
+                    if not last:
+                        dados["lives"]["last_notified"][last_key] = True
+                        nome_streamer = data.get("nome", tiktok_name)
+                        observacao = data.get("observacao", "")
+                        if canal:
+                            desc = f"**{nome_streamer}** está ao vivo no TikTok!"
+                            if observacao: desc += f"\n{observacao}"
+                            embed = discord.Embed(title="🔴 LIVE NO TIKTOK", description=desc, color=0xff0050)
+                            embed.add_field(name="Link", value=f"https://tiktok.com/@{tiktok_name}", inline=False)
+                            await canal.send(content=role_mention, embed=embed)
+                else:
+                    last_key = f"tiktok_{uid}"
+                    if last_key in dados["lives"]["last_notified"]:
+                        del dados["lives"]["last_notified"][last_key]
+
     salvar_dados()
 
 @live_check_loop.before_loop
 async def before_live_check():
     await bot.wait_until_ready()
 
+# ========= PAINEL DE LIVES =========
 class LiveConfigView(View):
     def __init__(self, server_id):
         super().__init__(timeout=None)
@@ -953,7 +1024,6 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
         if extracted_plat and extracted_id:
             platform = extracted_plat
             identifier = extracted_id
-            # Se não foi definido nome via Discord, usa o identifier como nome
             nome_streamer = identifier
         else:
             if plat_input not in ["twitch", "youtube", "kick", "tiktok"]:
@@ -963,12 +1033,11 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
             identifier = username_input
             nome_streamer = identifier
 
-        uid = str(interaction.user.id)  # fallback
+        uid = str(interaction.user.id)
         if self.discord_user.value.strip():
             try:
                 uid_str = self.discord_user.value.strip().replace("<@!","").replace("<@","").replace(">","")
                 uid = str(int(uid_str))
-                # Se Discord foi vinculado, usa o nome do membro
                 member = interaction.guild.get_member(int(uid))
                 if member:
                     nome_streamer = member.display_name
@@ -999,7 +1068,7 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
             await interaction.message.edit(embed=embed, view=self.parent_view)
         except: pass
 
-# ========= PAINEL DE AÇÕES (com data e múltiplas prints) =========
+# ========= PAINEL DE AÇÕES =========
 class ActionPanelView(View):
     def __init__(self, server_id):
         super().__init__(timeout=None)
@@ -1080,7 +1149,6 @@ class MemberSelectView(View):
         print_urls = []
         def check(m):
             return m.author == interaction.user and m.attachments and any(a.content_type and a.content_type.startswith('image/') for a in m.attachments)
-        # Coleta múltiplas prints até que o usuário digite "pronto"
         await interaction.followup.send("Envie quantas prints quiser. Quando terminar, digite `pronto`.", ephemeral=True)
         while True:
             try:

@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands, tasks
-from discord.ui import Button, View, Modal, TextInput
+from discord.ui import Button, View, Modal, TextInput, UserSelect, Select
 import asyncio
 from datetime import datetime
 import json
@@ -26,6 +26,8 @@ CHAT_RANK_ID = int(os.getenv("CHAT_RANK_ID", "1498109956421976124"))
 CHAT_COMPRA_VENDA_ID = int(os.getenv("CHAT_COMPRA_VENDA_ID", "1498110154317496330"))
 LOG_REGISTROS_ID = int(os.getenv("LOG_REGISTROS_ID", "1498349960062570740"))
 CANAL_LIVES_PAINEL_ID = int(os.getenv("CANAL_LIVES_PAINEL_ID", "1498692536800252084"))
+CANAL_ACOES_PAINEL_ID = int(os.getenv("CANAL_ACOES_PAINEL_ID", "1498714657970589717"))
+CANAL_ACOES_LOGS_ID = int(os.getenv("CANAL_ACOES_LOGS_ID", "1498718200173433002"))
 
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
@@ -45,7 +47,8 @@ dados = {
         "config": {},
         "streamers": {},
         "last_notified": {}
-    }
+    },
+    "acoes": {}
 }
 
 def salvar_dados():
@@ -877,21 +880,9 @@ class ConfigSteamersView(View):
         await interaction.response.edit_message(embed=embed, view=self.parent_view)
 
 class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
-    plataforma = TextInput(
-        label="PLATAFORMA (twitch/youtube/kick/tiktok)",
-        placeholder="Ex: twitch",
-        required=True
-    )
-    username = TextInput(
-        label="USERNAME DO STREAMER",
-        placeholder="Ex: alanzoka, CHICOMG, @lordntj1478, youtube.com/@lordn",
-        required=True
-    )
-    discord_user = TextInput(
-        label="DISCORD DO STREAMER (opcional)",
-        placeholder="ID ou @ do usuário",
-        required=False
-    )
+    plataforma = TextInput(label="PLATAFORMA (twitch/youtube/kick/tiktok)", placeholder="Ex: twitch", required=True)
+    username = TextInput(label="USERNAME DO STREAMER", placeholder="Ex: alanzoka, CHICOMG, @lordntj1478, youtube.com/@lordn", required=True)
+    discord_user = TextInput(label="DISCORD DO STREAMER (opcional)", placeholder="ID ou @ do usuário", required=False)
     def __init__(self, server_id, parent_view):
         super().__init__()
         self.server_id = server_id
@@ -899,8 +890,6 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
     async def on_submit(self, interaction: discord.Interaction):
         plat_input = self.plataforma.value.strip().lower()
         username_input = self.username.value.strip()
-
-        # Tenta extrair plataforma do link, se for uma URL
         extracted_plat, extracted_id = extract_platform_from_url(username_input)
         if extracted_plat and extracted_id:
             platform = extracted_plat
@@ -911,34 +900,22 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
                 return
             platform = plat_input
             identifier = username_input
-
-        # Define o Discord do streamer (opcional)
-        uid = str(interaction.user.id)  # fallback: próprio usuário
+        uid = str(interaction.user.id)
         if self.discord_user.value.strip():
             try:
                 uid_str = self.discord_user.value.strip().replace("<@!","").replace("<@","").replace(">","")
                 uid = str(int(uid_str))
-            except:
-                pass
-
+            except: pass
         if str(self.server_id) not in dados["lives"]["streamers"]:
             dados["lives"]["streamers"][str(self.server_id)] = {}
         if uid not in dados["lives"]["streamers"][str(self.server_id)]:
-            dados["lives"]["streamers"][str(self.server_id)][uid] = {
-                "nome": str(uid),
-                "twitch": None,
-                "youtube": None,
-                "kick": None,
-                "tiktok": None
-            }
+            dados["lives"]["streamers"][str(self.server_id)][uid] = {"nome": str(uid), "twitch": None, "youtube": None, "kick": None, "tiktok": None}
         dados["lives"]["streamers"][str(self.server_id)][uid][platform] = identifier
         if self.discord_user.value.strip():
             try:
                 member = interaction.guild.get_member(int(uid))
-                if member:
-                    dados["lives"]["streamers"][str(self.server_id)][uid]["nome"] = member.display_name
-            except:
-                pass
+                if member: dados["lives"]["streamers"][str(self.server_id)][uid]["nome"] = member.display_name
+            except: pass
         salvar_dados()
         await interaction.response.send_message(f"Streamer adicionado em **{platform}**: `{identifier}`", ephemeral=True)
         embed = await self.parent_view.build_embed()
@@ -953,16 +930,192 @@ class RemoveStreamerModal(Modal, title="Remover Streamer"):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             uid = int(self.discord_id.value.strip().replace("<@!","").replace("<@","").replace(">",""))
-        except:
-            await interaction.response.send_message("ID inválido.", ephemeral=True); return
+        except: await interaction.response.send_message("ID inválido.", ephemeral=True); return
         if str(self.server_id) in dados["lives"]["streamers"] and str(uid) in dados["lives"]["streamers"][str(self.server_id)]:
             del dados["lives"]["streamers"][str(self.server_id)][str(uid)]
             salvar_dados()
             await interaction.response.send_message("Streamer removido com sucesso.", ephemeral=True)
-        else:
-            await interaction.response.send_message("Streamer não encontrado.", ephemeral=True)
+        else: await interaction.response.send_message("Streamer não encontrado.", ephemeral=True)
         embed = await self.parent_view.build_embed()
         await interaction.message.edit(embed=embed, view=self.parent_view)
+
+# ========= PAINEL DE AÇÕES =========
+class ActionPanelView(View):
+    def __init__(self, server_id):
+        super().__init__(timeout=None)
+        self.server_id = server_id
+
+    @discord.ui.button(label="Abrir Ação", style=discord.ButtonStyle.success, emoji="⚔️")
+    async def open_action(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(ActionModal(self.server_id))
+
+    @discord.ui.button(label="Pagamento", style=discord.ButtonStyle.primary, emoji="💰")
+    async def payment(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas administradores podem gerenciar pagamentos.", ephemeral=True); return
+        server_actions = dados["acoes"].get(str(self.server_id), {})
+        unpaid = {k: v for k, v in server_actions.items() if not v.get("pago", False)}
+        if not unpaid:
+            await interaction.response.send_message("Nenhuma ação pendente de pagamento.", ephemeral=True); return
+        view = ActionSelectView(self.server_id, unpaid)
+        await interaction.response.send_message("Selecione a ação para efetuar o pagamento:", view=view, ephemeral=True)
+
+class ActionModal(Modal, title="Registrar Ação"):
+    nome_acao = TextInput(label="Ação (nome do lugar)", placeholder="Ex: Assalto ao Banco Central", required=True)
+    valor = TextInput(label="Valor (R$)", placeholder="Ex: 25000", required=True)
+    resultado = TextInput(label="Vitória ou Derrota", placeholder="Digite Vitória ou Derrota", required=True)
+    darkcoin = TextInput(label="Darkcoin", placeholder="Quantidade, 0 se não houve", required=True)
+
+    def __init__(self, server_id):
+        super().__init__()
+        self.server_id = server_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try: valor_num = float(self.valor.value.replace(",","."))
+        except ValueError: await interaction.response.send_message("Valor inválido!", ephemeral=True); return
+        try: dark_num = int(self.darkcoin.value)
+        except ValueError: await interaction.response.send_message("Quantidade de Darkcoin inválida!", ephemeral=True); return
+        result = self.resultado.value.strip().lower()
+        if result not in ["vitória","derrota","vitoria"]:
+            await interaction.response.send_message("Resultado deve ser 'Vitória' ou 'Derrota'.", ephemeral=True); return
+        result = "Vitória" if result in ["vitória","vitoria"] else "Derrota"
+        view = MemberSelectView(self.server_id, {
+            "nome_acao": self.nome_acao.value.strip(),
+            "valor": valor_num,
+            "resultado": result,
+            "darkcoin": dark_num,
+            "puxado_por": interaction.user.id
+        })
+        await interaction.response.send_message("Selecione os membros que participaram da ação:", view=view, ephemeral=True)
+
+class MemberSelectView(View):
+    def __init__(self, server_id, action_data):
+        super().__init__(timeout=120)
+        self.server_id = server_id
+        self.action_data = action_data
+        self.selected_members = [action_data["puxado_por"]]
+
+    @discord.ui.select(cls=UserSelect, placeholder="Selecione os membros...", min_values=1, max_values=25)
+    async def select_members(self, interaction: discord.Interaction, select: UserSelect):
+        self.selected_members = list(set([self.action_data["puxado_por"]] + [u.id for u in select.values]))
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Confirmar e Enviar Print", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: Button):
+        if not self.selected_members:
+            await interaction.response.send_message("Selecione pelo menos um membro.", ephemeral=True); return
+        self.action_data["membros"] = self.selected_members
+        await interaction.response.send_message(
+            f"Membros selecionados: {len(self.selected_members)}. Agora, **envie a print da ação** neste chat privado.",
+            ephemeral=True
+        )
+        def check(m): return m.author == interaction.user and m.attachments and any(a.content_type and a.content_type.startswith('image/') for a in m.attachments)
+        try:
+            msg = await bot.wait_for('message', timeout=120.0, check=check)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("Tempo esgotado para envio da print. Ação cancelada.", ephemeral=True); return
+        self.action_data["print_url"] = msg.attachments[0].url
+        self.action_data["pago"] = False
+        self.action_data["data"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        action_id = str(int(datetime.now().timestamp()))
+        dados["acoes"].setdefault(str(self.server_id), {})[action_id] = self.action_data
+        salvar_dados()
+        canal_logs = bot.get_channel(CANAL_ACOES_LOGS_ID)
+        if canal_logs:
+            embed = discord.Embed(title="NOVA AÇÃO REGISTRADA", color=discord.Color.green(), timestamp=datetime.now())
+            embed.add_field(name="Ação", value=self.action_data["nome_acao"], inline=True)
+            embed.add_field(name="Valor", value=f"R$ {self.action_data['valor']:,.2f}", inline=True)
+            embed.add_field(name="Resultado", value=self.action_data["resultado"], inline=True)
+            embed.add_field(name="Darkcoin", value=str(self.action_data["darkcoin"]), inline=True)
+            embed.add_field(name="Líder", value=f"<@{self.action_data['puxado_por']}>", inline=True)
+            membros_str = " ".join(f"<@{m}>" for m in self.selected_members)
+            embed.add_field(name="Participantes", value=membros_str, inline=False)
+            embed.set_image(url=self.action_data["print_url"])
+            await canal_logs.send(embed=embed)
+        await interaction.followup.send("Ação registrada com sucesso!", ephemeral=True)
+        self.stop()
+
+class ActionSelectView(View):
+    def __init__(self, server_id, actions):
+        super().__init__(timeout=120)
+        self.server_id = server_id
+        self.add_item(ActionDropdown(actions))
+
+class ActionDropdown(Select):
+    def __init__(self, actions):
+        options = [
+            discord.SelectOption(label=f"{v['nome_acao'][:50]} (R$ {v['valor']:,.2f})", value=k)
+            for k, v in actions.items()
+        ]
+        super().__init__(placeholder="Escolha uma ação...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        action_id = self.values[0]
+        action = dados["acoes"].get(str(interaction.guild_id), {}).get(action_id)
+        if not action:
+            await interaction.response.send_message("Ação não encontrada.", ephemeral=True); return
+        valor = action["valor"]
+        lavagem = valor * 0.25
+        liquido = valor - lavagem
+        n_membros = len(action["membros"])
+        por_membro = liquido / n_membros if n_membros > 0 else 0
+        embed = discord.Embed(title="RESUMO DO PAGAMENTO", color=discord.Color.orange())
+        embed.add_field(name="Valor Total (Dinheiro Sujo)", value=f"R$ {valor:,.2f}", inline=False)
+        embed.add_field(name="Lavagem (25%)", value=f"R$ {lavagem:,.2f}", inline=True)
+        embed.add_field(name="Valor Líquido", value=f"R$ {liquido:,.2f}", inline=True)
+        embed.add_field(name="Dividido por", value=f"{n_membros} membros", inline=True)
+        embed.add_field(name="Cada membro recebe", value=f"R$ {por_membro:,.2f}", inline=True)
+        view = ConfirmPaymentView(interaction.guild_id, action_id, liquido, por_membro, action["membros"])
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class ConfirmPaymentView(View):
+    def __init__(self, server_id, action_id, valor_liquido, valor_por_membro, membros):
+        super().__init__(timeout=120)
+        self.server_id = server_id
+        self.action_id = action_id
+        self.valor_liquido = valor_liquido
+        self.valor_por_membro = valor_por_membro
+        self.membros = membros
+
+    @discord.ui.button(label="Confirmar Pagamento", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message(
+            "Pagamento confirmado! Envie as **prints dos comprovantes** (uma por membro ou uma geral).",
+            ephemeral=True
+        )
+        def check(m): return m.author == interaction.user and m.attachments and any(a.content_type and a.content_type.startswith('image/') for a in m.attachments)
+        try:
+            msgs = []
+            for _ in range(len(self.membros)):
+                msg = await bot.wait_for('message', timeout=120.0, check=check)
+                msgs.append(msg)
+                if len(msgs) >= len(self.membros):
+                    break
+        except asyncio.TimeoutError: pass
+        print_urls = [m.attachments[0].url for m in msgs if m.attachments]
+        action = dados["acoes"].get(str(self.server_id), {}).get(self.action_id)
+        if action:
+            action["pago"] = True
+            action["pagamento"] = {
+                "valor_liquido": self.valor_liquido,
+                "valor_por_membro": self.valor_por_membro,
+                "print_urls": print_urls,
+                "data_pagamento": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "admin_id": interaction.user.id
+            }
+            salvar_dados()
+            canal_logs = bot.get_channel(CANAL_ACOES_LOGS_ID)
+            if canal_logs:
+                embed = discord.Embed(title="PAGAMENTO DE AÇÃO", color=discord.Color.green(), timestamp=datetime.now())
+                embed.add_field(name="Ação", value=action["nome_acao"], inline=True)
+                embed.add_field(name="Valor Líquido", value=f"R$ {self.valor_liquido:,.2f}", inline=True)
+                embed.add_field(name="Por Membro", value=f"R$ {self.valor_por_membro:,.2f}", inline=True)
+                embed.add_field(name="Admin", value=f"<@{interaction.user.id}>", inline=True)
+                if print_urls: embed.set_image(url=print_urls[0])
+                await canal_logs.send(embed=embed)
+            await interaction.followup.send("Pagamento registrado com sucesso!", ephemeral=True)
+        else: await interaction.followup.send("Erro: ação não encontrada.", ephemeral=True)
+        self.stop()
 
 # ========= EVENTOS =========
 @bot.event
@@ -1002,7 +1155,15 @@ async def on_ready():
             async for msg in canal_backup.history(limit=5):
                 if msg.author == bot.user: await msg.delete()
             await canal_backup.send(embed=discord.Embed(title="💾 PAINEL DE BACKUP", description="💾 **Criar Backup**\n🗑️ **Apagar Backups**", color=discord.Color.blue()), view=BackupView())
-        # Painel de lives
+        canal_acoes = bot.get_channel(CANAL_ACOES_PAINEL_ID)
+        if canal_acoes:
+            async for msg in canal_acoes.history(limit=5):
+                if msg.author == bot.user: await msg.delete()
+            embed = discord.Embed(title="⚔️ PAINEL DE AÇÕES", description="Gerencie as ações e os pagamentos da facção.", color=discord.Color.dark_red())
+            embed.add_field(name="Abrir Ação", value="Registre uma nova ação com valor, participantes e print.", inline=False)
+            embed.add_field(name="Pagamento", value="Efetue o pagamento das ações pendentes (apenas ADMs).", inline=False)
+            view = ActionPanelView(guild.id)
+            await canal_acoes.send(embed=embed, view=view)
         canal_lives = bot.get_channel(CANAL_LIVES_PAINEL_ID)
         if canal_lives:
             async for msg in canal_lives.history(limit=5):

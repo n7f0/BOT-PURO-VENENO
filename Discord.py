@@ -653,7 +653,7 @@ class BotaoCriarCanalView(View):
             await atualizar_ranking()
         except Exception as e: await interaction.edit_original_response(content=f"Erro: {str(e)[:200]}")
 
-# ========= SISTEMA DE LIVES =========
+# ========= SISTEMA DE LIVES (com dropdown para remover) =========
 def extract_platform_from_url(url: str):
     url = url.strip().lower()
     if "twitch.tv" in url:
@@ -844,7 +844,11 @@ class ConfigSteamersView(View):
 
     @discord.ui.button(label="Remover Streamer", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def remove(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(RemoveStreamerModal(self.server_id, self.parent_view))
+        streamers = dados["lives"]["streamers"].get(str(self.server_id), {})
+        if not streamers:
+            await interaction.response.send_message("Nenhum streamer cadastrado para remover.", ephemeral=True); return
+        view = RemoveStreamerSelectView(self.server_id, self.parent_view)
+        await interaction.response.send_message("Selecione o streamer que deseja remover:", view=view, ephemeral=True)
 
     @discord.ui.button(label="Twitch", style=discord.ButtonStyle.primary, emoji="📺", row=1)
     async def toggle_twitch(self, interaction: discord.Interaction, button: Button):
@@ -878,6 +882,47 @@ class ConfigSteamersView(View):
     async def voltar(self, interaction: discord.Interaction, button: Button):
         embed = await self.parent_view.build_embed()
         await interaction.response.edit_message(embed=embed, view=self.parent_view)
+
+class RemoveStreamerSelectView(View):
+    def __init__(self, server_id, parent_view):
+        super().__init__(timeout=120)
+        self.server_id = server_id
+        self.parent_view = parent_view
+        streamers = dados["lives"]["streamers"].get(str(server_id), {})
+        options = []
+        for uid, data in streamers.items():
+            nome = data.get("nome", uid)
+            plats = []
+            if data.get("twitch"): plats.append("Twitch")
+            if data.get("youtube"): plats.append("YouTube")
+            if data.get("kick"): plats.append("Kick")
+            if data.get("tiktok"): plats.append("TikTok")
+            desc = f"{nome} ({', '.join(plats)})" if plats else nome
+            options.append(discord.SelectOption(label=desc[:100], value=uid))
+        if options:
+            self.add_item(StreamerRemoveDropdown(options, server_id, parent_view))
+
+class StreamerRemoveDropdown(Select):
+    def __init__(self, options, server_id, parent_view):
+        super().__init__(placeholder="Escolha um streamer para remover...", options=options)
+        self.server_id = server_id
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        uid = self.values[0]
+        if str(self.server_id) in dados["lives"]["streamers"] and uid in dados["lives"]["streamers"][str(self.server_id)]:
+            nome = dados["lives"]["streamers"][str(self.server_id)][uid].get("nome", uid)
+            del dados["lives"]["streamers"][str(self.server_id)][uid]
+            salvar_dados()
+            await interaction.response.send_message(f"Streamer **{nome}** removido com sucesso!", ephemeral=True)
+            # Tentar atualizar a mensagem original (se ainda existir)
+            try:
+                embed = await self.parent_view.build_embed()
+                await interaction.message.edit(embed=embed, view=self.parent_view)
+            except:
+                pass
+        else:
+            await interaction.response.send_message("Streamer não encontrado.", ephemeral=True)
 
 class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
     plataforma = TextInput(label="PLATAFORMA (twitch/youtube/kick/tiktok)", placeholder="Ex: twitch", required=True)
@@ -918,26 +963,12 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
             except: pass
         salvar_dados()
         await interaction.response.send_message(f"Streamer adicionado em **{platform}**: `{identifier}`", ephemeral=True)
-        embed = await self.parent_view.build_embed()
-        await interaction.message.edit(embed=embed, view=self.parent_view)
-
-class RemoveStreamerModal(Modal, title="Remover Streamer"):
-    discord_id = TextInput(label="ID do usuário do Discord", placeholder="Ex: 123456", required=True)
-    def __init__(self, server_id, parent_view):
-        super().__init__()
-        self.server_id = server_id
-        self.parent_view = parent_view
-    async def on_submit(self, interaction: discord.Interaction):
+        # Tentar atualizar a mensagem do painel
         try:
-            uid = int(self.discord_id.value.strip().replace("<@!","").replace("<@","").replace(">",""))
-        except: await interaction.response.send_message("ID inválido.", ephemeral=True); return
-        if str(self.server_id) in dados["lives"]["streamers"] and str(uid) in dados["lives"]["streamers"][str(self.server_id)]:
-            del dados["lives"]["streamers"][str(self.server_id)][str(uid)]
-            salvar_dados()
-            await interaction.response.send_message("Streamer removido com sucesso.", ephemeral=True)
-        else: await interaction.response.send_message("Streamer não encontrado.", ephemeral=True)
-        embed = await self.parent_view.build_embed()
-        await interaction.message.edit(embed=embed, view=self.parent_view)
+            embed = await self.parent_view.build_embed()
+            await interaction.message.edit(embed=embed, view=self.parent_view)
+        except:
+            pass
 
 # ========= PAINEL DE AÇÕES =========
 class ActionPanelView(View):
@@ -1013,7 +1044,8 @@ class MemberSelectView(View):
         try:
             msg = await bot.wait_for('message', timeout=120.0, check=check)
         except asyncio.TimeoutError:
-            await interaction.followup.send("Tempo esgotado para envio da print. Ação cancelada.", ephemeral=True); return
+            await interaction.followup.send("Tempo esgotado para envio da print. Ação cancelada.", ephemeral=True)
+            return
         self.action_data["print_url"] = msg.attachments[0].url
         self.action_data["pago"] = False
         self.action_data["data"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1114,7 +1146,8 @@ class ConfirmPaymentView(View):
                 if print_urls: embed.set_image(url=print_urls[0])
                 await canal_logs.send(embed=embed)
             await interaction.followup.send("Pagamento registrado com sucesso!", ephemeral=True)
-        else: await interaction.followup.send("Erro: ação não encontrada.", ephemeral=True)
+        else:
+            await interaction.followup.send("Erro: ação não encontrada.", ephemeral=True)
         self.stop()
 
 # ========= EVENTOS =========

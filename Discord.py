@@ -168,7 +168,7 @@ async def limpar_logs_usuario(user_id, user_name):
     return total_limpo
 
 async def log_acao(acao, usuario, detalhes, cor=None):
-    cores = {"criar_canal":0x00ff00,"registrar_farm":0x00ff00,"registrar_dinheiro_sujo":0xff0000,"pagar":0xffa500,"fechar_canal":0xff0000,"fechar_caixa":0xffa500,"reset_rank":0xff0000,"info":0x3498db,"admin":0x9b59b6,"setar_admin":0x9b59b6,"compra_venda":0x00ff00,"usuario_removido":0xff0000}
+    cores = {"criar_canal":0x00ff00,"registrar_farm":0x00ff00,"registrar_dinheiro_sujo":0xff0000,"pagar":0xffa500,"fechar_canal":0xff0000,"fechar_caixa":0xffa500,"reset_rank":0xff0000,"info":0x3498db,"admin":0x9b59b6,"setar_admin":0x9b59b6,"compra_venda":0x00ff00,"usuario_removido":0xff0000,"editar_farm":0x3498db}
     cor_final = cores.get(acao, 0x3498db) if cor is None else cor
     canal_logs = bot.get_channel(CHAT_LOGS_ID)
     if canal_logs:
@@ -470,6 +470,123 @@ class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
         try: await self.canal.edit(name=nome); await interaction.followup.send(f"Nome alterado para {nome}", ephemeral=True)
         except Exception as e: await interaction.followup.send(f"Erro: {str(e)[:100]}", ephemeral=True)
 
+# ========= NOVOS COMPONENTES PARA EDIÇÃO DE FARM =========
+class EditarRegistroSelect(Select):
+    def __init__(self, user_id, user_name):
+        self.user_id = str(user_id)
+        self.user_name = user_name
+        user_data = dados["usuarios"].get(self.user_id, {})
+        farms = user_data.get("farms", [])
+        options = []
+        for idx, farm in enumerate(farms):
+            farm_id = farm.get("farm_id", idx + 1)
+            produtos_desc = ", ".join(f"{p['produto']}: {p['quantidade']}" for p in farm["produtos"])
+            data_farm = farm["data"]
+            label = f"Farm #{farm_id} - {produtos_desc}"
+            description = f"Data: {data_farm}"[:100]
+            options.append(discord.SelectOption(label=label, description=description, value=str(idx)))
+        if not options:
+            options.append(discord.SelectOption(label="Nenhum registro encontrado", value="none", default=True))
+        super().__init__(placeholder="Selecione o registro que deseja editar...", min_values=1, max_values=1, options=options[:25])
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if self.values[0] == "none":
+            await interaction.followup.send("Você não possui registros de farm para editar.", ephemeral=True)
+            return
+        idx = int(self.values[0])
+        user_data = dados["usuarios"].get(self.user_id)
+        if not user_data or idx >= len(user_data["farms"]):
+            await interaction.followup.send("Registro não encontrado.", ephemeral=True)
+            return
+        farm = user_data["farms"][idx]
+        modal = EditarFarmModal(self.user_id, self.user_name, interaction.channel, idx, farm)
+        await interaction.response.send_modal(modal)
+
+class EditarFarmModal(Modal, title="Editar Registro de Farm"):
+    chumbo = TextInput(label="CHUMBO - Nova quantidade", placeholder="0", required=False)
+    capsula = TextInput(label="CÁPSULA - Nova quantidade", placeholder="0", required=False)
+    polvora = TextInput(label="PÓLVORA - Nova quantidade", placeholder="0", required=False)
+
+    def __init__(self, user_id, user_name, canal, farm_index, farm_atual):
+        super().__init__()
+        self.user_id = user_id
+        self.user_name = user_name
+        self.canal = canal
+        self.farm_index = farm_index
+        self.farm_atual = farm_atual
+        # Pré-carregar valores atuais
+        produtos_atuais = {p["produto"]: p["quantidade"] for p in farm_atual["produtos"]}
+        self.chumbo.default = str(produtos_atuais.get("CHUMBO", ""))
+        self.capsula.default = str(produtos_atuais.get("CAPSULA", ""))
+        self.polvora.default = str(produtos_atuais.get("POLVORA", ""))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        novos_produtos = []
+        for campo, nome in [(self.chumbo, "CHUMBO"), (self.capsula, "CAPSULA"), (self.polvora, "POLVORA")]:
+            if campo.value and campo.value.strip():
+                try:
+                    qtd = int(campo.value.strip())
+                    if qtd > 0:
+                        novos_produtos.append({"produto": nome, "quantidade": qtd})
+                except ValueError:
+                    pass
+        if not novos_produtos:
+            await interaction.followup.send("Nenhum produto válido foi informado. Edição cancelada.", ephemeral=True)
+            return
+        await interaction.followup.send("📸 Envie a **nova print** comprovando a edição.", ephemeral=True)
+
+        def check(m):
+            return (m.author == interaction.user and m.channel == self.canal
+                    and m.attachments and any(a.content_type and a.content_type.startswith('image/') for a in m.attachments))
+
+        try:
+            msg = await bot.wait_for('message', timeout=60.0, check=check)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("Tempo esgotado. Edição cancelada.", ephemeral=True)
+            return
+
+        nova_imagem_url = msg.attachments[0].url
+        user_data = dados["usuarios"].get(self.user_id)
+        if not user_data or self.farm_index >= len(user_data["farms"]):
+            await interaction.followup.send("Registro não encontrado (pode ter sido removido).", ephemeral=True)
+            return
+
+        antigo_registro = user_data["farms"][self.farm_index]
+        novo_registro = {
+            "produtos": novos_produtos,
+            "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "print_url": nova_imagem_url,
+            "validado": True,
+            "farm_id": antigo_registro.get("farm_id", self.farm_index + 1)
+        }
+        user_data["farms"][self.farm_index] = novo_registro
+        salvar_dados()
+
+        embed = discord.Embed(
+            title="✏️ REGISTRO DE FARM EDITADO",
+            description=f"**Usuário:** <@{self.user_id}>\n**Farm ID:** {novo_registro['farm_id']}",
+            color=discord.Color.blue(),
+            timestamp=datetime.now()
+        )
+        produtos_str = "\n".join(f"🔫 **{p['produto']}:** {p['quantidade']} itens" for p in novos_produtos)
+        embed.add_field(name="Novos valores", value=produtos_str, inline=False)
+        embed.add_field(name="Data da edição", value=novo_registro["data"], inline=False)
+        embed.set_image(url=nova_imagem_url)
+        await self.canal.send(embed=embed)
+
+        canal_registros = bot.get_channel(LOG_REGISTROS_ID)
+        if canal_registros:
+            await canal_registros.send(embed=embed)
+
+        await interaction.followup.send(f"Registro #{novo_registro['farm_id']} editado com sucesso!", ephemeral=True)
+        await log_acao("editar_farm", interaction.user,
+                       f"Usuário: {self.user_name}\nFarm ID: {novo_registro['farm_id']}\nNovos produtos: {produtos_str}",
+                       0x3498db)
+        await atualizar_ranking()
+
+# ========= VIEW DO CANAL PRIVADO ATUALIZADA COM BOTÃO EDITAR =========
 class FarmChannelView(View):
     def __init__(self, user_id, user_name, canal_id):
         super().__init__(timeout=None); self.user_id = user_id; self.user_name = user_name; self.canal_id = canal_id
@@ -481,6 +598,15 @@ class FarmChannelView(View):
     async def farm_dinheiro_sujo(self, interaction: discord.Interaction, button: Button):
         if not (is_admin(interaction.user) or is_membro(interaction.user)): await interaction.response.send_message("Você não tem permissão para registrar dinheiro sujo.", ephemeral=True); return
         await interaction.response.send_modal(DinheiroSujoModal(self.user_id, self.user_name, interaction.channel))
+    # NOVO BOTÃO: Editar Registro
+    @discord.ui.button(label="Editar Registro", style=discord.ButtonStyle.blurple, emoji="✏️", row=0)
+    async def editar_registro(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.user_id and not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas o dono do canal ou admin pode editar.", ephemeral=True); return
+        select = EditarRegistroSelect(self.user_id, self.user_name)
+        view = View(timeout=None)
+        view.add_item(select)
+        await interaction.response.send_message("Selecione o registro que deseja editar:", view=view, ephemeral=True)
     @discord.ui.button(label="Fechar Caixa", style=discord.ButtonStyle.danger, emoji="📊", row=1)
     async def fechar_caixa(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
@@ -640,7 +766,7 @@ class BotaoCriarCanalView(View):
             dados["canais"][str(interaction.user.id)] = canal.id; salvar_dados()
             view = FarmChannelView(interaction.user.id, interaction.user.name, canal.id)
             tipo = "ADMIN" if is_admin(interaction.user) else "MEMBRO"
-            embed = discord.Embed(title="SEU CANAL PRIVADO", description=f"Bem-vindo(a) {interaction.user.mention}!\n\n🔒 Apenas você e administradores têm acesso.\n\n**BOTÕES DISPONÍVEIS PARA {tipo}:**\n📦 **Farm Produtos** - Registrar farm de produtos (com print)\n💰 **Farm Dinheiro Sujo** - Registrar dinheiro sujo (com print)", color=discord.Color.green())
+            embed = discord.Embed(title="SEU CANAL PRIVADO", description=f"Bem-vindo(a) {interaction.user.mention}!\n\n🔒 Apenas você e administradores têm acesso.\n\n**BOTÕES DISPONÍVEIS PARA {tipo}:**\n📦 **Farm Produtos** - Registrar farm de produtos (com print)\n💰 **Farm Dinheiro Sujo** - Registrar dinheiro sujo (com print)\n✏️ **Editar Registro** - Corrigir um registro de farm", color=discord.Color.green())
             if tipo == "ADMIN": embed.description += "\n\n**BOTÕES ADMINISTRATIVOS:**\n📊 **Fechar Caixa** - Fechar caixa semanal\n✏️ **Mudar Nome** - Renomear canal\n📜 **Histórico Caixa** - Ver fechamentos\n🔄 **Reset Semanal** - Limpar dados da semana\n🗑️ **Fechar Canal** - Deletar canal"
             await canal.send(embed=embed, view=view)
             await log_acao("criar_canal", interaction.user, f"Canal criado: {canal.mention}", 0x00ff00)

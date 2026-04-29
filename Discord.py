@@ -9,6 +9,7 @@ import sys
 import aiohttp
 import re
 import glob
+import shutil
 
 # ========= CONFIGURAÇÕES =========
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -82,26 +83,37 @@ def carregar_dados():
         return False
 
 async def salvar_backup_completo(admin_name="Sistema"):
-    """Salva um backup completo e envia para o canal de backups"""
+    """Salva um backup completo (JSON + arquivo) e envia para o canal de backups"""
     backup_nome = f"backup_completo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    
+    # Copia os dados atuais
     backup = {
         "data_backup": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "admin": admin_name,
-        "dados": dados.copy()
+        "dados": json.loads(json.dumps(dados))  # deep copy
     }
+    
+    # Salva o backup local
     with open(backup_nome, "w", encoding="utf-8") as f:
         json.dump(backup, f, ensure_ascii=False, indent=2)
+    
+    # Salva também o dados_bot.json atual
+    salvar_dados()
     
     # Enviar para o canal de backup
     canal_backup = bot.get_channel(CANAL_BACKUP_ARQUIVOS_ID)
     if canal_backup and isinstance(canal_backup, discord.TextChannel):
         embed = discord.Embed(
             title="💾 BACKUP COMPLETO SALVO",
-            description=f"**Arquivo:** {backup_nome}\n**Data:** {backup['data_backup']}\n**Admin:** {admin_name}",
+            description=f"**Arquivo:** {backup_nome}\n**Data:** {backup['data_backup']}\n**Admin:** {admin_name}\n**Inclui:** farms, pagamentos, canais, ações, lives, prints, compras/vendas, etc.",
             color=discord.Color.green()
         )
         await canal_backup.send(embed=embed)
+        # Envia o arquivo de backup
         await canal_backup.send(file=discord.File(backup_nome))
+        # Envia também o dados_bot.json atual
+        if os.path.exists("dados_bot.json"):
+            await canal_backup.send(file=discord.File("dados_bot.json"))
     
     return backup_nome
 
@@ -463,17 +475,13 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         await self.canal.send(embed=embed)
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
-        await interaction.followup.Send(f"Pagamento de R$ {pagamento_final:,.2f} registrado!", ephemeral=True)
+        await interaction.followup.send(f"Pagamento de R$ {pagamento_final:,.2f} registrado!", ephemeral=True)
         await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nPagamento: R$ {pagamento_final}", 0xffa500)
         await atualizar_ranking()
 
-# ========= COMPRA/VENDA (com tipos PISTOLA, SUB, RIFLE, FUZIL) =========
+# ========= COMPRA/VENDA (COM PRINT OBRIGATÓRIO) =========
 class VendaModal(Modal, title="Venda de Munição"):
-    tipo_municao = TextInput(
-        label="Tipo de Munição (PISTOLA/SUB/RIFLE/FUZIL)",
-        placeholder="Ex: PISTOLA",
-        required=True
-    )
+    tipo_municao = TextInput(label="Tipo de Munição (PISTOLA/SUB/RIFLE/FUZIL)", placeholder="Ex: PISTOLA", required=True)
     quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
     valor_total = TextInput(label="Valor Total (R$)", placeholder="Ex: 500", required=True)
     faccao_compradora = TextInput(label="Facção Compradora", placeholder="Ex: Primeiro Comando", required=True)
@@ -490,16 +498,25 @@ class VendaModal(Modal, title="Venda de Munição"):
         except ValueError: await interaction.followup.send("Quantidade ou valor inválidos!", ephemeral=True); return
         faccao = self.faccao_compradora.value.strip()
         responsavel_nome = self.responsavel.value.strip()
+        
+        # Exigir print
+        await interaction.followup.send("📸 Agora envie a **print do comprovante da venda**.", ephemeral=True)
+        def check(m): return m.author==interaction.user and m.channel==interaction.channel and m.attachments and any(a.content_type and a.content_type.startswith('image/') for a in m.attachments)
+        try: msg = await bot.wait_for('message', timeout=60.0, check=check)
+        except asyncio.TimeoutError: await interaction.followup.send("Tempo esgotado!", ephemeral=True); return
+        imagem_url = msg.attachments[0].url
+        
         dados_log = {"Tipo":"VENDA","Munição":tipo,"Quantidade":f"{qtd:,} unidades","Valor Total":f"R$ {valor:,.2f}","Facção Compradora":faccao,"Responsável":responsavel_nome,"Registrado por":interaction.user.mention}
         await criar_canal_compra_venda_log("venda", dados_log)
         embed = discord.Embed(title="VENDA DE MUNIÇÃO", color=discord.Color.green(), timestamp=datetime.now())
         embed.add_field(name="Munição", value=tipo, inline=True); embed.add_field(name="Quantidade", value=f"{qtd:,} unidades", inline=True)
         embed.add_field(name="Valor Total", value=f"R$ {valor:,.2f}", inline=True); embed.add_field(name="Facção Compradora", value=faccao, inline=True)
         embed.add_field(name="Responsável", value=responsavel_nome, inline=True); embed.add_field(name="Registrado por", value=interaction.user.mention, inline=True)
+        embed.set_image(url=imagem_url)
         canal_vendas = bot.get_channel(CHAT_COMPRA_VENDA_ID)
         if canal_vendas and isinstance(canal_vendas, discord.TextChannel):
             await canal_vendas.send(embed=embed)
-            dados["compras_vendas"].append({"tipo":"venda","municao":tipo,"quantidade":qtd,"valor_total":valor,"faccao_compradora":faccao,"responsavel":responsavel_nome,"registrado_por":interaction.user.id,"data":datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+            dados["compras_vendas"].append({"tipo":"venda","municao":tipo,"quantidade":qtd,"valor_total":valor,"faccao_compradora":faccao,"responsavel":responsavel_nome,"registrado_por":interaction.user.id,"data":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"print_url":imagem_url})
             salvar_dados()
             await interaction.followup.send(f"✅ Venda de **{qtd:,} {tipo}** para **{faccao}** registrada! Valor: R$ {valor:,.2f}", ephemeral=True)
         else: await interaction.followup.send("Canal de vendas não encontrado!", ephemeral=True)
@@ -517,13 +534,22 @@ class CompraModal(Modal, title="Compra de Produto"):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try: qtd = int(self.quantidade.value); valor = float(self.valor_total.value.replace(",","."))
         except: await interaction.followup.send("Valores inválidos!", ephemeral=True); return
+        
+        # Exigir print
+        await interaction.followup.send("📸 Agora envie a **print do comprovante da compra**.", ephemeral=True)
+        def check(m): return m.author==interaction.user and m.channel==interaction.channel and m.attachments and any(a.content_type and a.content_type.startswith('image/') for a in m.attachments)
+        try: msg = await bot.wait_for('message', timeout=60.0, check=check)
+        except asyncio.TimeoutError: await interaction.followup.send("Tempo esgotado!", ephemeral=True); return
+        imagem_url = msg.attachments[0].url
+        
         await criar_canal_compra_venda_log("compra", {"Tipo":"COMPRA","Quantidade":f"{qtd:,}","Produto":self.produto.value,"Valor Total":f"R$ {valor:,.2f}","Facção Vendedora":self.faccao_vendedora.value,"Responsável":self.responsavel.value,"Registrado por":interaction.user.mention})
         embed = discord.Embed(title="COMPRA DE PRODUTO", color=discord.Color.blue())
         embed.add_field(name="Quantidade", value=f"{qtd:,}"); embed.add_field(name="Produto", value=self.produto.value)
         embed.add_field(name="Valor Total", value=f"R$ {valor:,.2f}"); embed.add_field(name="Facção Vendedora", value=self.faccao_vendedora.value)
         embed.add_field(name="Responsável", value=self.responsavel.value)
+        embed.set_image(url=imagem_url)
         canal = bot.get_channel(CHAT_COMPRA_VENDA_ID)
-        if canal: await canal.send(embed=embed); dados["compras_vendas"].append({"tipo":"compra","quantidade":qtd,"produto":self.produto.value,"valor_total":valor,"faccao_vendedora":self.faccao_vendedora.value,"responsavel":self.responsavel.value,"registrado_por":interaction.user.id,"data":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}); salvar_dados(); await interaction.followup.send("Compra registrada!", ephemeral=True)
+        if canal: await canal.send(embed=embed); dados["compras_vendas"].append({"tipo":"compra","quantidade":qtd,"produto":self.produto.value,"valor_total":valor,"faccao_vendedora":self.faccao_vendedora.value,"responsavel":self.responsavel.value,"registrado_por":interaction.user.id,"data":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"print_url":imagem_url}); salvar_dados(); await interaction.followup.send("Compra registrada!", ephemeral=True)
         else: await interaction.followup.send("Canal de vendas não encontrado!", ephemeral=True)
         await log_acao("compra_venda", interaction.user, f"Compra: {qtd} x {self.produto.value} - R$ {valor}", 0x00ff00)
 
@@ -764,7 +790,7 @@ class BotaoCriarCanalView(View):
             await atualizar_ranking()
         except Exception as e: await interaction.followup.send(f"Erro: {str(e)[:200]}", ephemeral=True)
 
-# ========= SISTEMA DE LIVES =========
+# ========= SISTEMA DE LIVES (com atualizar painel no painel de divulgação) =========
 def extract_platform_from_url(url: str):
     url = url.strip().lower()
     if "twitch.tv" in url:

@@ -8,6 +8,7 @@ import os
 import sys
 import aiohttp
 import re
+import glob
 
 # ========= CONFIGURAÇÕES =========
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -15,9 +16,8 @@ if not TOKEN:
     print("ERRO: Token do Discord não encontrado!")
     sys.exit(1)
 
-# IDs de cargos
-CARGO_ADMIN_GERAL_ID = int(os.getenv("CARGO_ADMIN_GERAL_ID", "1386002307950317759"))  # Acesso total
-CARGO_MEMBRO_ID = int(os.getenv("CARGO_MEMBRO_ID", "1386004220691353675"))          # Acesso básico
+CARGO_ADMIN_GERAL_ID = int(os.getenv("CARGO_ADMIN_GERAL_ID", "1386002307950317759"))
+CARGO_MEMBRO_ID = int(os.getenv("CARGO_MEMBRO_ID", "1386004220691353675"))
 CARGO_COMPRA_VENDA_IDS = [
     1386002307950317759,
     1386002372504850573,
@@ -32,7 +32,6 @@ CARGO_REGISTRAR_ACAO_IDS = [
     1386004190026792991
 ]
 
-# IDs de canais e categorias
 CATEGORIA_FARMS_ID = int(os.getenv("CATEGORIA_FARMS_ID", "1498108914703532183"))
 CATEGORIA_PAINEL_ID = int(os.getenv("CATEGORIA_PAINEL_ID", "1498111045489790987"))
 CATEGORIA_BACKUP_ID = int(os.getenv("CATEGORIA_BACKUP_ID", "1498305209175380080"))
@@ -45,6 +44,7 @@ LOG_REGISTROS_ID = int(os.getenv("LOG_REGISTROS_ID", "1498349960062570740"))
 CANAL_LIVES_PAINEL_ID = int(os.getenv("CANAL_LIVES_PAINEL_ID", "1498692536800252084"))
 CANAL_ACOES_PAINEL_ID = int(os.getenv("CANAL_ACOES_PAINEL_ID", "1498714657970589717"))
 CANAL_ACOES_LOGS_ID = int(os.getenv("CANAL_ACOES_LOGS_ID", "1498718200173433002"))
+CANAL_BACKUP_ARQUIVOS_ID = int(os.getenv("CANAL_BACKUP_ARQUIVOS_ID", "1498898858413920386"))
 
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
@@ -81,7 +81,30 @@ def carregar_dados():
     except:
         return False
 
-# ========= FUNÇÕES AUXILIARES =========
+async def salvar_backup_completo(admin_name="Sistema"):
+    """Salva um backup completo e envia para o canal de backups"""
+    backup_nome = f"backup_completo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    backup = {
+        "data_backup": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "admin": admin_name,
+        "dados": dados.copy()
+    }
+    with open(backup_nome, "w", encoding="utf-8") as f:
+        json.dump(backup, f, ensure_ascii=False, indent=2)
+    
+    # Enviar para o canal de backup
+    canal_backup = bot.get_channel(CANAL_BACKUP_ARQUIVOS_ID)
+    if canal_backup and isinstance(canal_backup, discord.TextChannel):
+        embed = discord.Embed(
+            title="💾 BACKUP COMPLETO SALVO",
+            description=f"**Arquivo:** {backup_nome}\n**Data:** {backup['data_backup']}\n**Admin:** {admin_name}",
+            color=discord.Color.green()
+        )
+        await canal_backup.send(embed=embed)
+        await canal_backup.send(file=discord.File(backup_nome))
+    
+    return backup_nome
+
 async def criar_canal_backup(tipo, nome_arquivo=None):
     categoria = bot.get_channel(CATEGORIA_BACKUP_ID)
     if not categoria: return None
@@ -161,7 +184,6 @@ async def log_admin(titulo, descricao, cor=0xffa500):
 
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 
-# ========= VERIFICAÇÕES DE CARGO =========
 def tem_cargo(member, cargos_ids):
     if not hasattr(member, 'guild'): return False
     for cid in cargos_ids:
@@ -171,11 +193,9 @@ def tem_cargo(member, cargos_ids):
     return False
 
 def is_admin(member) -> bool:
-    """Acesso total (cargo 1386002307950317759)"""
     return tem_cargo(member, [CARGO_ADMIN_GERAL_ID])
 
 def is_membro(member) -> bool:
-    """Cargo de membro comum (1386004220691353675)"""
     return tem_cargo(member, [CARGO_MEMBRO_ID])
 
 def pode_comprar_vender(member) -> bool:
@@ -242,9 +262,7 @@ class ConfirmarResetView(View):
     @discord.ui.button(label="Sim, resetar ranking", style=discord.ButtonStyle.danger, emoji="⚠️")
     async def confirmar(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        backup_nome = f"backup_rank_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(backup_nome,"w",encoding="utf-8") as f: json.dump({"usuarios":dados["usuarios"].copy(),"data_backup":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"admin":interaction.user.name}, f)
-        await criar_canal_backup("novo", backup_nome)
+        backup_nome = await salvar_backup_completo(interaction.user.name)
         dados["usuarios"] = {}; dados["caixa_semana"] = {}; dados["dinheiro_sujo"] = {}
         salvar_dados()
         await log_acao("reset_rank", interaction.user, f"Ranking resetado por {interaction.user.mention}", 0xff0000)
@@ -264,8 +282,7 @@ class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
         super().__init__(); self.user_id = user_id; self.user_name = user_name; self.canal = canal
     async def on_submit(self, interaction: discord.Interaction):
         if not (is_admin(interaction.user) or is_membro(interaction.user)):
-            await interaction.response.send_message("Você não tem permissão para registrar dinheiro sujo.", ephemeral=True)
-            return
+            await interaction.response.send_message("Você não tem permissão para registrar dinheiro sujo.", ephemeral=True); return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try: valor = float(self.quantidade.value.replace(",","."))
         except ValueError: await interaction.followup.send("Valor inválido!", ephemeral=True); return
@@ -318,7 +335,6 @@ class FarmProdutosModal(Modal, title="Registrar Farm Produtos"):
         new_chumbo = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="CHUMBO")
         new_capsula = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="CAPSULA")
         new_polvora = sum(p["quantidade"] for f in dados["usuarios"][str(self.user_id)]["farms"] for p in f["produtos"] if p["produto"]=="POLVORA")
-        # Notificação de meta (apenas avisa, sem acúmulo)
         canal_user = bot.get_channel(dados["canais"].get(str(self.user_id)))
         if canal_user:
             for nome, old, new in [("CHUMBO",old_chumbo,new_chumbo), ("CAPSULA",old_capsula,new_capsula), ("POLVORA",old_polvora,new_polvora)]:
@@ -447,13 +463,17 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         await self.canal.send(embed=embed)
         canal_registros = bot.get_channel(LOG_REGISTROS_ID)
         if canal_registros: await canal_registros.send(embed=embed)
-        await interaction.followup.send(f"Pagamento de R$ {pagamento_final:,.2f} registrado!", ephemeral=True)
+        await interaction.followup.Send(f"Pagamento de R$ {pagamento_final:,.2f} registrado!", ephemeral=True)
         await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nPagamento: R$ {pagamento_final}", 0xffa500)
         await atualizar_ranking()
 
-# ========= COMPRA/VENDA (com permissões de cargo) =========
+# ========= COMPRA/VENDA (com tipos PISTOLA, SUB, RIFLE, FUZIL) =========
 class VendaModal(Modal, title="Venda de Munição"):
-    tipo_municao = TextInput(label="Tipo de Munição (CHUMBO/CÁPSULA/PÓLVORA)", placeholder="Ex: CHUMBO", required=True)
+    tipo_municao = TextInput(
+        label="Tipo de Munição (PISTOLA/SUB/RIFLE/FUZIL)",
+        placeholder="Ex: PISTOLA",
+        required=True
+    )
     quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
     valor_total = TextInput(label="Valor Total (R$)", placeholder="Ex: 500", required=True)
     faccao_compradora = TextInput(label="Facção Compradora", placeholder="Ex: Primeiro Comando", required=True)
@@ -464,10 +484,8 @@ class VendaModal(Modal, title="Venda de Munição"):
             await interaction.response.send_message("Você não tem permissão para registrar vendas.", ephemeral=True); return
         await interaction.response.defer(ephemeral=True, thinking=True)
         tipo = self.tipo_municao.value.strip().upper()
-        if tipo not in ["CHUMBO", "CÁPSULA", "CAPSULA", "PÓLVORA", "POLVORA"]:
-            await interaction.followup.send("Tipo de munição inválido! Use CHUMBO, CÁPSULA ou PÓLVORA.", ephemeral=True); return
-        if tipo in ["CÁPSULA", "CAPSULA"]: tipo = "CÁPSULA"
-        elif tipo in ["PÓLVORA", "POLVORA"]: tipo = "PÓLVORA"
+        if tipo not in ["PISTOLA", "SUB", "RIFLE", "FUZIL"]:
+            await interaction.followup.send("Tipo de munição inválido! Use PISTOLA, SUB, RIFLE ou FUZIL.", ephemeral=True); return
         try: qtd = int(self.quantidade.value); valor = float(self.valor_total.value.replace(",","."))
         except ValueError: await interaction.followup.send("Quantidade ou valor inválidos!", ephemeral=True); return
         faccao = self.faccao_compradora.value.strip()
@@ -631,7 +649,7 @@ class ConfirmarFechamentoView(View):
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: Button): await interaction.response.send_message("Cancelado!", ephemeral=True)
 
-# ========= MODAIS ADMIN (somente cargo geral) =========
+# ========= MODAIS ADMIN =========
 class RemoverUsuarioModal(Modal, title="Remover Usuário"):
     user_id = TextInput(label="ID do usuário", required=True)
     async def on_submit(self, interaction: discord.Interaction):
@@ -644,9 +662,6 @@ class RemoverUsuarioModal(Modal, title="Remover Usuário"):
             await interaction.followup.send(f"✅ {user.mention} removido! Limpas: {total}", ephemeral=True)
             await log_admin("USUÁRIO REMOVIDO", f"{user.mention} por {interaction.user.mention}", 0xff0000)
             await atualizar_ranking()
-            if interaction.guild:
-                member = interaction.guild.get_member(uid)
-                if member and tem_cargo(member, [CARGO_ADMIN_GERAL_ID]): await member.remove_roles(interaction.guild.get_role(CARGO_ADMIN_GERAL_ID))
         except Exception as e: await interaction.followup.send(f"Erro: {e}", ephemeral=True)
 
 class BackupView(View):
@@ -655,20 +670,64 @@ class BackupView(View):
     async def criar_backup(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Sem permissão!", ephemeral=True); return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        nome = f"backup_completo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(nome,"w",encoding="utf-8") as f: json.dump({"data_backup":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"admin":interaction.user.name,"dados":dados.copy()}, f)
-        await criar_canal_backup("novo", nome)
-        await interaction.followup.send("Backup criado!", ephemeral=True)
-        await log_admin("BACKUP CRIADO", f"Admin: {interaction.user.mention}", 0x00ff00)
-    @discord.ui.button(label="Apagar Backups", style=discord.ButtonStyle.danger, emoji="🗑️")
+        backup_nome = await salvar_backup_completo(interaction.user.name)
+        await interaction.followup.send(f"✅ Backup **{backup_nome}** criado e salvo no canal de backups!", ephemeral=True)
+        await log_admin("BACKUP CRIADO", f"Admin: {interaction.user.mention}\nArquivo: {backup_nome}", 0x00ff00)
+    @discord.ui.button(label="Apagar Backups Locais", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def apagar_backups(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction.user): await interaction.response.send_message("Sem permissão!", ephemeral=True); return
         await interaction.response.defer(ephemeral=True, thinking=True)
         backups = [a for a in os.listdir('.') if a.startswith('backup_') and a.endswith('.json')]
-        if not backups: await interaction.followup.send("Nenhum backup.", ephemeral=True); return
-        for b in backups: await criar_canal_backup("deletado", b); os.remove(b)
-        await interaction.followup.send(f"{len(backups)} backups deletados!", ephemeral=True)
+        if not backups: await interaction.followup.send("Nenhum backup local encontrado.", ephemeral=True); return
+        for b in backups: os.remove(b)
+        await interaction.followup.send(f"{len(backups)} backup(s) locais deletados!", ephemeral=True)
         await log_admin("BACKUPS DELETADOS", f"Admin: {interaction.user.mention}\nQtd: {len(backups)}", 0xff0000)
+    @discord.ui.button(label="Recarregar Backup", style=discord.ButtonStyle.primary, emoji="🔄")
+    async def recarregar_backup(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction.user): await interaction.response.send_message("Sem permissão!", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        backups = sorted(glob.glob("backup_completo_*.json"), reverse=True)
+        if not backups:
+            await interaction.followup.send("Nenhum backup encontrado para recarregar.", ephemeral=True); return
+        view = RecarregarBackupSelectView(backups)
+        await interaction.followup.send("Selecione o backup que deseja restaurar:", view=view, ephemeral=True)
+
+class RecarregarBackupSelectView(View):
+    def __init__(self, backups):
+        super().__init__(timeout=120)
+        self.backups = backups
+        options = []
+        for b in backups[:25]:
+            try:
+                with open(b, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                info = f"{data.get('data_backup', '?')} - {data.get('admin', '?')}"
+            except:
+                info = b
+            options.append(discord.SelectOption(label=info[:100], value=b))
+        if options:
+            self.add_item(BackupSelectDropdown(options))
+
+class BackupSelectDropdown(Select):
+    def __init__(self, options):
+        super().__init__(placeholder="Escolha um backup para restaurar...", options=options)
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        arquivo = self.values[0]
+        try:
+            with open(arquivo, "r", encoding="utf-8") as f:
+                backup_data = json.load(f)
+            if "dados" in backup_data:
+                dados.clear()
+                dados.update(backup_data["dados"])
+                salvar_dados()
+                await interaction.followup.send(f"✅ Backup restaurado com sucesso!\n**Arquivo:** {arquivo}\n**Data:** {backup_data.get('data_backup', '?')}", ephemeral=True)
+                await log_admin("BACKUP RESTAURADO", f"Admin: {interaction.user.mention}\nArquivo: {arquivo}", 0x00ff00)
+                await atualizar_ranking()
+            else:
+                await interaction.followup.send("Arquivo de backup inválido!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Erro ao recarregar backup: {e}", ephemeral=True)
 
 # ========= BOTÃO CRIAR CANAL =========
 class BotaoCriarCanalView(View):
@@ -705,7 +764,7 @@ class BotaoCriarCanalView(View):
             await atualizar_ranking()
         except Exception as e: await interaction.followup.send(f"Erro: {str(e)[:200]}", ephemeral=True)
 
-# ========= SISTEMA DE LIVES (com permissões) =========
+# ========= SISTEMA DE LIVES =========
 def extract_platform_from_url(url: str):
     url = url.strip().lower()
     if "twitch.tv" in url:
@@ -766,7 +825,7 @@ async def check_youtube_lives(streamers):
 
 async def check_tiktok_live(username):
     try:
-        headers = {"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36","Accept-Language":"en-US,en;q=0.9","Accept":"text/html,application/xhtml+xml","Referer":"https://www.tiktok.com/"}
+        headers = {"User-Agent":"Mozilla/5.0","Accept-Language":"en-US,en;q=0.9","Accept":"text/html","Referer":"https://www.tiktok.com/"}
         async with aiohttp.ClientSession() as session:
             url = f"https://www.tiktok.com/@{username}/live"
             async with session.get(url, headers=headers, allow_redirects=True) as resp:
@@ -896,10 +955,15 @@ class LiveConfigView(View):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     @discord.ui.button(label="Adicionar Streamer", style=discord.ButtonStyle.success, emoji="➕", row=1)
     async def adicionar(self, interaction: discord.Interaction, button: Button):
-        # Membros podem adicionar o próprio canal; admins podem adicionar qualquer um
         if not (is_admin(interaction.user) or is_membro(interaction.user)):
             await interaction.response.send_message("Você não tem permissão para adicionar streamer.", ephemeral=True); return
         await interaction.response.send_modal(AddStreamerByLinkModal(self.server_id, self))
+    @discord.ui.button(label="Atualizar Painel", style=discord.ButtonStyle.secondary, emoji="🔄", row=1)
+    async def atualizar_painel(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction.user): await interaction.response.send_message("Sem permissão.", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        embed = await self.build_embed()
+        await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
 class SetCanalModal(Modal, title="Definir Canal e Cargo"):
     canal_id = TextInput(label="ID do canal de notícias", required=True)
@@ -1020,7 +1084,6 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
                 member = interaction.guild.get_member(int(uid))
                 if member: nome_streamer = member.display_name
             except: pass
-        # Membros só podem adicionar a si mesmos (seu próprio Discord vinculado ao canal)
         if is_membro(interaction.user) and not is_admin(interaction.user):
             if uid != str(interaction.user.id):
                 await interaction.followup.send("Você só pode adicionar seu próprio canal.", ephemeral=True); return
@@ -1037,7 +1100,7 @@ class AddStreamerByLinkModal(Modal, title="Adicionar Streamer"):
             await interaction.message.edit(embed=embed, view=self.parent_view)
         except: pass
 
-# ========= PAINEL DE AÇÕES (com permissões de cargo) =========
+# ========= PAINEL DE AÇÕES (sem botão atualizar painel) =========
 class ActionPanelView(View):
     def __init__(self, server_id):
         super().__init__(timeout=None)
@@ -1057,16 +1120,6 @@ class ActionPanelView(View):
         if not unpaid: await interaction.followup.send("Nenhuma ação pendente.", ephemeral=True); return
         view = ActionSelectView(self.server_id, unpaid)
         await interaction.followup.send("Selecione a ação:", view=view, ephemeral=True)
-    @discord.ui.button(label="Atualizar Painel", style=discord.ButtonStyle.secondary, emoji="🔄", row=1)
-    async def atualizar_painel(self, interaction: discord.Interaction, button: Button):
-        # Apenas recria a mensagem do painel
-        if not pode_registrar_acao(interaction.user):
-            await interaction.response.send_message("Sem permissão.", ephemeral=True); return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        embed = discord.Embed(title="⚔️ PAINEL DE AÇÕES", description="Gerencie as ações e os pagamentos da facção.", color=discord.Color.dark_red())
-        embed.add_field(name="Abrir Ação", value="Registre uma nova ação com valor, data, participantes e prints.", inline=False)
-        embed.add_field(name="Pagamento", value="Efetue o pagamento das ações pendentes.", inline=False)
-        await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
 class ActionModal(Modal, title="Registrar Ação"):
     nome_acao = TextInput(label="Ação (nome do lugar)", placeholder="Ex: Assalto ao Banco Central", required=True)
@@ -1243,11 +1296,11 @@ async def on_ready():
             await canal_criar.send(embed=discord.Embed(title="SISTEMA DE FARM", description="Clique no botão abaixo para criar seu canal privado!\n\n🔒 Apenas você e os administradores terão acesso", color=discord.Color.blue()), view=BotaoCriarCanalView())
         categoria_backup = guild.get_channel(CATEGORIA_BACKUP_ID)
         if categoria_backup:
-            canal_backup = discord.utils.get(categoria_backup.channels, name="painel-backup")
-            if not canal_backup: canal_backup = await categoria_backup.create_text_channel("painel-backup")
-            async for msg in canal_backup.history(limit=5):
+            canal_backup_painel = discord.utils.get(categoria_backup.channels, name="painel-backup")
+            if not canal_backup_painel: canal_backup_painel = await categoria_backup.create_text_channel("painel-backup")
+            async for msg in canal_backup_painel.history(limit=5):
                 if msg.author == bot.user: await msg.delete()
-            await canal_backup.send(embed=discord.Embed(title="💾 PAINEL DE BACKUP", description="💾 **Criar Backup**\n🗑️ **Apagar Backups**", color=discord.Color.blue()), view=BackupView())
+            await canal_backup_painel.send(embed=discord.Embed(title="💾 PAINEL DE BACKUP", description="💾 **Criar Backup** - Salva tudo\n🗑️ **Apagar Backups Locais**\n🔄 **Recarregar Backup** - Restaura um backup anterior", color=discord.Color.blue()), view=BackupView())
         canal_acoes = bot.get_channel(CANAL_ACOES_PAINEL_ID)
         if canal_acoes:
             async for msg in canal_acoes.history(limit=5):
@@ -1264,6 +1317,10 @@ async def on_ready():
             view = LiveConfigView(guild.id)
             embed = await view.build_embed()
             await canal_lives.send(embed=embed, view=view)
+        # Salvar backup automático ao iniciar
+        canal_backup_arquivos = bot.get_channel(CANAL_BACKUP_ARQUIVOS_ID)
+        if canal_backup_arquivos:
+            await salvar_backup_completo("Sistema (Auto)")
     await atualizar_ranking()
     await log_admin("🤖 BOT INICIADO", f"Bot {bot.user.mention} online!", 0x00ff00)
 

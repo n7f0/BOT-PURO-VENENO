@@ -230,13 +230,12 @@ class ConfirmarResetView(View):
         await interaction.response.send_message("Reset cancelado.", ephemeral=True)
         self.stop()
 
-# ========= MODAIS DE FARM (com permissão para membros no Dinheiro Sujo) =========
+# ========= MODAIS DE FARM =========
 class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
     quantidade = TextInput(label="Valor (R$)", placeholder="Ex: 5000", required=True)
     def __init__(self, user_id, user_name, canal):
         super().__init__(); self.user_id = user_id; self.user_name = user_name; self.canal = canal
     async def on_submit(self, interaction: discord.Interaction):
-        # Permite admin OU membro com o cargo específico
         if not (is_admin(interaction.user) or is_membro(interaction.user)):
             await interaction.response.send_message("Apenas administradores ou membros podem registrar dinheiro sujo!", ephemeral=True)
             return
@@ -425,24 +424,100 @@ class FechamentoCaixaModal(Modal, title="Finalizar Fechamento"):
         await log_acao("fechar_caixa", interaction.user, f"Usuário: {self.user_name}\nPagamento: R$ {pagamento_final}", 0xffa500)
         await atualizar_ranking()
 
-# ========= COMPRA/VENDA =========
+# ========= COMPRA/VENDA (com tipo de munição) =========
 class VendaModal(Modal, title="Venda de Munição"):
-    quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
-    valor_total = TextInput(label="Valor Total (R$)", placeholder="Ex: 500", required=True)
-    faccao_compradora = TextInput(label="Facção Compradora", placeholder="Ex: Primeiro Comando", required=True)
-    responsavel = TextInput(label="Responsável pela Venda", placeholder="Ex: @usuario ou nome", required=True)
+    tipo_municao = TextInput(
+        label="Tipo de Munição (CHUMBO/CÁPSULA/PÓLVORA)",
+        placeholder="Ex: CHUMBO",
+        required=True
+    )
+    quantidade = TextInput(
+        label="Quantidade",
+        placeholder="Ex: 1000",
+        required=True
+    )
+    valor_total = TextInput(
+        label="Valor Total (R$)",
+        placeholder="Ex: 500",
+        required=True
+    )
+    faccao_compradora = TextInput(
+        label="Facção Compradora",
+        placeholder="Ex: Primeiro Comando",
+        required=True
+    )
+    responsavel = TextInput(
+        label="Responsável pela Venda",
+        placeholder="Ex: @usuario ou nome",
+        required=True
+    )
+
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        try: qtd = int(self.quantidade.value); valor = float(self.valor_total.value.replace(",","."))
-        except: await interaction.followup.send("Valores inválidos!", ephemeral=True); return
-        await criar_canal_compra_venda_log("venda", {"Tipo":"VENDA","Quantidade":f"{qtd:,} munições","Valor Total":f"R$ {valor:,.2f}","Facção Compradora":self.faccao_compradora.value,"Responsável":self.responsavel.value,"Registrado por":interaction.user.mention})
-        embed = discord.Embed(title="VENDA DE MUNIÇÃO", color=discord.Color.green())
-        embed.add_field(name="Quantidade", value=f"{qtd:,}"); embed.add_field(name="Valor Total", value=f"R$ {valor:,.2f}")
-        embed.add_field(name="Facção Compradora", value=self.faccao_compradora.value); embed.add_field(name="Responsável", value=self.responsavel.value)
-        canal = bot.get_channel(CHAT_COMPRA_VENDA_ID)
-        if canal: await canal.send(embed=embed); dados["compras_vendas"].append({"tipo":"venda","quantidade":qtd,"valor_total":valor,"faccao_compradora":self.faccao_compradora.value,"responsavel":self.responsavel.value,"registrado_por":interaction.user.id,"data":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}); salvar_dados(); await interaction.followup.send("Venda registrada!", ephemeral=True)
-        else: await interaction.followup.send("Canal de vendas não encontrado!", ephemeral=True)
-        await log_acao("compra_venda", interaction.user, f"Venda: {qtd} munições - R$ {valor}", 0x00ff00)
+        
+        # Valida o tipo de munição
+        tipo = self.tipo_municao.value.strip().upper()
+        if tipo not in ["CHUMBO", "CÁPSULA", "CAPSULA", "PÓLVORA", "POLVORA"]:
+            await interaction.followup.send("Tipo de munição inválido! Use CHUMBO, CÁPSULA ou PÓLVORA.", ephemeral=True)
+            return
+        
+        # Normaliza o nome
+        if tipo in ["CÁPSULA", "CAPSULA"]:
+            tipo = "CÁPSULA"
+        elif tipo in ["PÓLVORA", "POLVORA"]:
+            tipo = "PÓLVORA"
+        
+        try:
+            qtd = int(self.quantidade.value)
+            valor = float(self.valor_total.value.replace(",", "."))
+        except ValueError:
+            await interaction.followup.send("Quantidade ou valor inválidos!", ephemeral=True)
+            return
+        
+        faccao = self.faccao_compradora.value.strip()
+        responsavel_nome = self.responsavel.value.strip()
+        
+        # Cria o log com o tipo de munição
+        dados_log = {
+            "Tipo": "VENDA",
+            "Munição": tipo,
+            "Quantidade": f"{qtd:,} unidades",
+            "Valor Total": f"R$ {valor:,.2f}",
+            "Facção Compradora": faccao,
+            "Responsável": responsavel_nome,
+            "Registrado por": interaction.user.mention
+        }
+        await criar_canal_compra_venda_log("venda", dados_log)
+        
+        # Cria o embed
+        embed = discord.Embed(title="VENDA DE MUNIÇÃO", color=discord.Color.green(), timestamp=datetime.now())
+        embed.add_field(name="Munição", value=tipo, inline=True)
+        embed.add_field(name="Quantidade", value=f"{qtd:,} unidades", inline=True)
+        embed.add_field(name="Valor Total", value=f"R$ {valor:,.2f}", inline=True)
+        embed.add_field(name="Facção Compradora", value=faccao, inline=True)
+        embed.add_field(name="Responsável", value=responsavel_nome, inline=True)
+        embed.add_field(name="Registrado por", value=interaction.user.mention, inline=True)
+        
+        canal_vendas = bot.get_channel(CHAT_COMPRA_VENDA_ID)
+        if canal_vendas and isinstance(canal_vendas, discord.TextChannel):
+            await canal_vendas.send(embed=embed)
+            
+            dados["compras_vendas"].append({
+                "tipo": "venda",
+                "municao": tipo,
+                "quantidade": qtd,
+                "valor_total": valor,
+                "faccao_compradora": faccao,
+                "responsavel": responsavel_nome,
+                "registrado_por": interaction.user.id,
+                "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+            salvar_dados()
+            await interaction.followup.send(f"✅ Venda de **{qtd:,} {tipo}** para **{faccao}** registrada! Valor: R$ {valor:,.2f}", ephemeral=True)
+        else:
+            await interaction.followup.send("Canal de vendas não encontrado!", ephemeral=True)
+        
+        await log_acao("compra_venda", interaction.user, f"Venda: {qtd} {tipo} - R$ {valor} - {faccao}", 0x00ff00)
 
 class CompraModal(Modal, title="Compra de Produto"):
     quantidade = TextInput(label="Quantidade", placeholder="Ex: 1000", required=True)
@@ -471,7 +546,7 @@ class CompraVendaView(View):
     @discord.ui.button(label="Compra de Produto", style=discord.ButtonStyle.primary, emoji="🛒")
     async def compra(self, interaction: discord.Interaction, button: Button): await interaction.response.send_modal(CompraModal())
 
-# ========= VIEWS DO CANAL PRIVADO =========
+# ========= VIEW DO CANAL PRIVADO (UNIFICADA) =========
 class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
     novo_nome = TextInput(label="Novo nome", placeholder="Ex: farm-lucas", required=True, max_length=90)
     def __init__(self, canal): super().__init__(); self.canal = canal
@@ -482,42 +557,38 @@ class MudarNomeModal(Modal, title="Mudar Nome do Canal"):
         try: await self.canal.edit(name=nome); await interaction.followup.send(f"Nome alterado para {nome}", ephemeral=True)
         except Exception as e: await interaction.followup.send(f"Erro: {str(e)[:100]}", ephemeral=True)
 
-class FarmChannelViewMembro(View):
+class FarmChannelView(View):
     def __init__(self, user_id, user_name, canal_id):
-        super().__init__(timeout=None); self.user_id = user_id; self.user_name = user_name; self.canal_id = canal_id
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        self.user_name = user_name
+        self.canal_id = canal_id
+
     @discord.ui.button(label="Farm Produtos", style=discord.ButtonStyle.success, emoji="📦", row=0)
     async def farm_produtos(self, interaction: discord.Interaction, button: Button):
-        if interaction.user.id != self.user_id and not is_admin(interaction.user): await interaction.response.send_message("Apenas o dono do canal!", ephemeral=True); return
+        if interaction.user.id != self.user_id and not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas o dono do canal!", ephemeral=True)
+            return
         await interaction.response.send_modal(FarmProdutosModal(self.user_id, self.user_name, interaction.channel))
+
     @discord.ui.button(label="Farm Dinheiro Sujo", style=discord.ButtonStyle.danger, emoji="💰", row=0)
     async def farm_dinheiro_sujo(self, interaction: discord.Interaction, button: Button):
-        # Agora membros também podem usar
         if not (is_admin(interaction.user) or is_membro(interaction.user)):
             await interaction.response.send_message("Apenas administradores ou membros podem registrar dinheiro sujo!", ephemeral=True)
             return
         await interaction.response.send_modal(DinheiroSujoModal(self.user_id, self.user_name, interaction.channel))
 
-class FarmChannelViewAdmin(View):
-    def __init__(self, user_id, user_name, canal_id):
-        super().__init__(timeout=None); self.user_id = user_id; self.user_name = user_name; self.canal_id = canal_id
-    @discord.ui.button(label="Farm Produtos", style=discord.ButtonStyle.success, emoji="📦", row=0)
-    async def farm_produtos(self, interaction: discord.Interaction, button: Button):
-        if interaction.user.id != self.user_id and not is_admin(interaction.user): await interaction.response.send_message("Apenas o dono do canal!", ephemeral=True); return
-        await interaction.response.send_modal(FarmProdutosModal(self.user_id, self.user_name, interaction.channel))
-    @discord.ui.button(label="Farm Dinheiro Sujo", style=discord.ButtonStyle.danger, emoji="💰", row=0)
-    async def farm_dinheiro_sujo(self, interaction: discord.Interaction, button: Button):
-        if not (is_admin(interaction.user) or is_membro(interaction.user)):
-            await interaction.response.send_message("Apenas administradores ou membros podem registrar dinheiro sujo!", ephemeral=True)
-            return
-        await interaction.response.send_modal(DinheiroSujoModal(self.user_id, self.user_name, interaction.channel))
     @discord.ui.button(label="Fechar Caixa", style=discord.ButtonStyle.danger, emoji="📊", row=1)
     async def fechar_caixa(self, interaction: discord.Interaction, button: Button):
-        if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         user_data = dados["usuarios"].get(str(self.user_id), {})
         total_sujo = user_data.get("dinheiro_sujo", 0.0)
         if total_sujo <= 0:
-            await interaction.followup.send("Nenhum dinheiro sujo acumulado.", ephemeral=True); return
+            await interaction.followup.send("Nenhum dinheiro sujo acumulado.", ephemeral=True)
+            return
         lavagem = total_sujo * 0.25
         restante = total_sujo - lavagem
         faccao = restante * 0.60
@@ -530,16 +601,24 @@ class FarmChannelViewAdmin(View):
         embed.set_footer(text="Clique no botão abaixo para continuar.")
         view = FechamentoSummaryView(self.user_id, self.user_name, interaction.channel, total_sujo, lavagem, faccao, membro_base)
         await interaction.followup.send(embed=embed, view=view, ephemeral=False)
+
     @discord.ui.button(label="Mudar Nome", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
     async def mudar_nome(self, interaction: discord.Interaction, button: Button):
-        if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
+            return
         await interaction.response.send_modal(MudarNomeModal(interaction.channel))
+
     @discord.ui.button(label="Histórico Caixa", style=discord.ButtonStyle.secondary, emoji="📜", row=1)
     async def historico_caixa(self, interaction: discord.Interaction, button: Button):
-        if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         fechamentos = dados["caixa_semana"].get(str(self.user_id), [])
-        if not fechamentos: await interaction.followup.send("Nenhum fechamento.", ephemeral=True); return
+        if not fechamentos:
+            await interaction.followup.send("Nenhum fechamento.", ephemeral=True)
+            return
         embed = discord.Embed(title="HISTÓRICO DE CAIXA", description=f"Últimos {min(10, len(fechamentos))} registros", color=discord.Color.blue())
         for fech in fechamentos[-10:]:
             data = datetime.strptime(fech["data"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y")
@@ -554,14 +633,20 @@ class FarmChannelViewAdmin(View):
             if fech.get('observacao'): txt += f"\n💌 {fech['observacao']}"
             embed.add_field(name=f"📅 {data}", value=txt, inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
+
     @discord.ui.button(label="Reset Semanal", style=discord.ButtonStyle.danger, emoji="🔄", row=2)
     async def reset_semanal(self, interaction: discord.Interaction, button: Button):
-        if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
+            return
         confirm_view = ConfirmResetSemanalView(self.user_id, self.user_name, interaction.channel)
         await interaction.response.send_message("⚠️ **Tem certeza que deseja resetar a semana?** Todos os dados (farms, dinheiro sujo) serão zerados!", view=confirm_view, ephemeral=True)
+
     @discord.ui.button(label="Fechar Canal", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
     async def fechar_canal(self, interaction: discord.Interaction, button: Button):
-        if not is_admin(interaction.user): await interaction.response.send_message("Apenas administradores!", ephemeral=True); return
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Apenas administradores!", ephemeral=True)
+            return
         await interaction.response.send_message("⚠️ Tem certeza?", view=ConfirmarFechamentoView(self.user_id, interaction.channel), ephemeral=True)
 
 class ConfirmResetSemanalView(View):
@@ -665,12 +750,8 @@ class BotaoCriarCanalView(View):
             nome = f"farm-{interaction.user.name}".lower().replace(" ","-")[:90]
             canal = await categoria.create_text_channel(nome, overwrites=overwrites)
             dados["canais"][str(interaction.user.id)] = canal.id; salvar_dados()
-            if is_admin(interaction.user):
-                view = FarmChannelViewAdmin(interaction.user.id, interaction.user.name, canal.id)
-                tipo = "ADMIN"
-            else:
-                view = FarmChannelViewMembro(interaction.user.id, interaction.user.name, canal.id)
-                tipo = "MEMBRO"
+            view = FarmChannelView(interaction.user.id, interaction.user.name, canal.id)
+            tipo = "ADMIN" if is_admin(interaction.user) else "MEMBRO"
             embed = discord.Embed(title="SEU CANAL PRIVADO", description=f"Bem-vindo(a) {interaction.user.mention}!\n\n🔒 Apenas você e administradores têm acesso.\n\n**BOTÕES DISPONÍVEIS PARA {tipo}:**\n📦 **Farm Produtos** - Registrar farm de produtos (com print)\n💰 **Farm Dinheiro Sujo** - Registrar dinheiro sujo (com print)", color=discord.Color.green())
             if tipo == "ADMIN":
                 embed.description += "\n\n**BOTÕES ADMINISTRATIVOS:**\n📊 **Fechar Caixa** - Fechar caixa semanal\n✏️ **Mudar Nome** - Renomear canal\n📜 **Histórico Caixa** - Ver fechamentos\n🔄 **Reset Semanal** - Limpar dados da semana\n🗑️ **Fechar Canal** - Deletar canal"

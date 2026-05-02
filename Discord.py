@@ -248,7 +248,7 @@ class ConfirmarResetView(View):
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: Button): await interaction.response.send_message("Reset cancelado.", ephemeral=True); self.stop()
 
-# ========= MODAIS DE FARM (PRODUTOS E DINHEIRO SUJO COM TRANSAÇÕES) =========
+# ========= MODAIS DE FARM =========
 class DinheiroSujoModal(Modal, title="Registrar Dinheiro Sujo"):
     quantidade = TextInput(label="Valor (R$)", placeholder="Ex: 5000", required=True)
     def __init__(self, user_id, user_name, canal):
@@ -463,7 +463,7 @@ class CompraVendaView(View):
     @discord.ui.button(label="Compra de Produto", style=discord.ButtonStyle.primary, emoji="🛒")
     async def compra(self, interaction: discord.Interaction, button: Button): await interaction.response.send_modal(CompraModal())
 
-# ========= EDIÇÃO SEPARADA DE PRODUTOS E DINHEIRO SUJO =========
+# ========= EDIÇÃO SEPARADA DE PRODUTOS E DINHEIRO SUJO (CORRIGIDO) =========
 class EditarRegistroSelect(Select):
     def __init__(self, user_id, user_name):
         self.user_id = str(user_id); self.user_name = user_name
@@ -480,12 +480,14 @@ class EditarRegistroSelect(Select):
         super().__init__(placeholder="Selecione o registro de farm...", min_values=1, max_values=1, options=options[:25])
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        if self.values[0] == "none": await interaction.followup.send("Nenhum registro de farm para editar.", ephemeral=True); return
+        if self.values[0] == "none":
+            await interaction.response.send_message("Nenhum registro de farm para editar.", ephemeral=True)
+            return
         idx = int(self.values[0])
         user_data = dados["usuarios"].get(self.user_id)
         if not user_data or idx >= len(user_data["farms"]):
-            await interaction.followup.send("Registro não encontrado.", ephemeral=True); return
+            await interaction.response.send_message("Registro não encontrado.", ephemeral=True)
+            return
         farm = user_data["farms"][idx]
         modal = EditarFarmModal(self.user_id, self.user_name, interaction.channel, idx, farm)
         await interaction.response.send_modal(modal)
@@ -551,12 +553,14 @@ class EditarDinheiroSujoSelect(Select):
         super().__init__(placeholder="Escolha o depósito de dinheiro sujo...", min_values=1, max_values=1, options=options[:25])
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        if self.values[0] == "none": await interaction.followup.send("Nenhum depósito de dinheiro sujo para editar.", ephemeral=True); return
+        if self.values[0] == "none":
+            await interaction.response.send_message("Nenhum depósito de dinheiro sujo para editar.", ephemeral=True)
+            return
         idx = int(self.values[0])
         user_data = dados["usuarios"].get(self.user_id)
         if not user_data or idx >= len(user_data.get("transacoes_dinheiro_sujo", [])):
-            await interaction.followup.send("Registro não encontrado.", ephemeral=True); return
+            await interaction.response.send_message("Registro não encontrado.", ephemeral=True)
+            return
         trans = user_data["transacoes_dinheiro_sujo"][idx]
         modal = EditarDinheiroSujoModal(self.user_id, self.user_name, interaction.channel, idx, trans)
         await interaction.response.send_modal(modal)
@@ -606,17 +610,19 @@ class TipoEdicaoSelect(Select):
             discord.SelectOption(label="💰 Dinheiro Sujo", description="Editar um depósito de dinheiro sujo", value="dinheiro_sujo")
         ]
         super().__init__(placeholder="O que você deseja editar?", min_values=1, max_values=1, options=options)
+
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
         tipo = self.values[0]
         if tipo == "produtos":
             select = EditarRegistroSelect(self.user_id, self.user_name)
-            view = View(timeout=None); view.add_item(select)
-            await interaction.followup.send("Selecione o registro de farm que deseja editar:", view=view, ephemeral=True)
+            view = View(timeout=None)
+            view.add_item(select)
+            await interaction.response.send_message("Selecione o registro de farm que deseja editar:", view=view, ephemeral=True)
         else:
             select = EditarDinheiroSujoSelect(self.user_id, self.user_name)
-            view = View(timeout=None); view.add_item(select)
-            await interaction.followup.send("Selecione o depósito de dinheiro sujo que deseja editar:", view=view, ephemeral=True)
+            view = View(timeout=None)
+            view.add_item(select)
+            await interaction.response.send_message("Selecione o depósito de dinheiro sujo que deseja editar:", view=view, ephemeral=True)
 
 async def enviar_historico_farms(interaction, user_id, user_name):
     user_data = dados["usuarios"].get(str(user_id), {})
@@ -850,7 +856,7 @@ class BotaoCriarCanalView(View):
             await interaction.followup.send(f"✅ Canal criado! Acesse: {canal.mention}", ephemeral=True); await atualizar_ranking()
         except Exception as e: await interaction.followup.send(f"Erro: {str(e)[:200]}", ephemeral=True)
 
-# ========= SISTEMA DE LIVES (COMPLETO, COMO NO SEU CÓDIGO ORIGINAL) =========
+# ========= SISTEMA DE LIVES =========
 def extract_platform_from_url(url: str):
     url = url.strip().lower()
     if "twitch.tv" in url:
